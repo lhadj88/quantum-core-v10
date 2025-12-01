@@ -1,0 +1,11 @@
+<!-- end list -->
+streamlit
+pandas
+numpy
+ccxt
+yfinance
+google-generativeai
+feedparser
+plotly
+gspread
+oauth2client
