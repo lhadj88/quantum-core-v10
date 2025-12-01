@@ -1,4 +1,3 @@
-<!-- end list -->
 streamlit
 pandas
 numpy
