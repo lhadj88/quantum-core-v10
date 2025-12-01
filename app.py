@@ -1,4 +1,3 @@
-<!-- end list -->
 # ==============================================================================
 # 🌌 QUANTUM CORE V10.3 - COMMAND CENTER (STREAMLIT EDITION)
 # Architecture : Mobile-First | Fullstack | Neuro-Symbolic
