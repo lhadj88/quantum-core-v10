@@ -1,237 +1,225 @@
 # ==============================================================================
-# 🌌 QUANTUM CORE V10.5 - UI ULTIMATE EDITION
-# Design : Cards, Loaders, Visual Feedback
+# 🌌 QUANTUM CORE V11.0 - TITAN EDITION (PRO VISUALIZATION)
+# Architecture : Streamlit + Plotly Interactive Charts + Deep AI Report
 # ==============================================================================
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 import ccxt
 import yfinance as yf
 import feedparser
 import google.generativeai as genai
+import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import json
-import time
 
-# --- 1. CONFIGURATION VISUELLE AVANCÉE ---
+# --- 1. CONFIGURATION PRO ---
 st.set_page_config(
-    page_title="QUANTUM V10",
+    page_title="QUANTUM TITAN",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
     page_icon="🛡️"
 )
 
-# CSS INJECTÉ (Pour le look "App Native")
+# Style Minimaliste & Pro (Typographie Apple/Bloomberg)
 st.markdown("""
 <style>
-    /* Fond global */
-    .stApp {background-color: #F0F2F6;}
-    
-    /* Style des Cartes */
-    .trade-card {
-        background-color: white;
-        padding: 20px;
-        border-radius: 15px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.05);
-        margin-bottom: 20px;
-        border-top: 5px solid #BDC3C7;
-    }
-    
-    /* Couleurs sémantiques */
-    .card-bullish {border-top-color: #2ECC71;}
-    .card-bearish {border-top-color: #E74C3C;}
-    .card-neutral {border-top-color: #F1C40F;}
-    
-    /* Typographie */
-    h1 {color: #2C3E50; font-family: 'Helvetica Neue', sans-serif;}
-    h2 {font-size: 1.2rem; font-weight: 700; margin-bottom: 5px;}
-    .big-price {font-size: 1.8rem; font-weight: 800; color: #34495E;}
-    .sub-text {font-size: 0.9rem; color: #7F8C8D;}
-    
-    /* Boutons */
-    .stButton>button {
-        width: 100%;
-        border-radius: 8px;
-        font-weight: bold;
-    }
+    .main {background-color: #0E1117;}
+    h1, h2, h3 {font-family: 'Roboto', sans-serif; font-weight: 300;}
+    .stTabs [data-baseweb="tab-list"] {gap: 24px;}
+    .stTabs [data-baseweb="tab"] {height: 50px; white-space: pre-wrap; background-color: #1E1E1E; border-radius: 5px; color: white;}
+    .stTabs [aria-selected="true"] {background-color: #2980B9; color: white;}
+    div[data-testid="metric-container"] {background-color: #262730; padding: 15px; border-radius: 10px; border-left: 4px solid #3498DB;}
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. SÉCURITÉ & CONNEXION ---
+# --- 2. SÉCURITÉ ---
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 else:
-    st.error("⛔ ERREUR CRITIQUE : Clé API manquante dans les Secrets.")
-    st.stop()
+    st.warning("⚠️ Mode Démo : Clés API manquantes.")
 
-# --- 3. MOTEUR D'ACQUISITION (AVEC FEEDBACK) ---
-@st.cache_data(ttl=120, show_spinner=False)
-def fetch_data_v10(grid_size):
+# --- 3. MOTEUR GRAPHIQUE (PLOTLY) ---
+def plot_quantum_chart(df, pivot, grid_lines, title):
+    """Génère un graphique financier Pro interactif"""
+    fig = go.Figure()
+
+    # Bougies (Candlestick)
+    fig.add_trace(go.Candlestick(
+        x=df['ts'], open=df['open'], high=df['high'], low=df['low'], close=df['close'],
+        name='BTC', increasing_line_color='#2ECC71', decreasing_line_color='#E74C3C'
+    ))
+
+    # Pivot Lundi (Ligne Jaune)
+    fig.add_hline(y=pivot, line_width=2, line_dash="dash", line_color="#F1C40F", annotation_text="PIVOT LUNDI")
+
+    # Grille Gann (Lignes Bleues)
+    for level in grid_lines:
+        fig.add_hline(y=level, line_width=1, line_color="#3498DB", opacity=0.5, annotation_text=f"GRID {level:.0f}")
+
+    # Layout Sombre Pro
+    fig.update_layout(
+        title=title,
+        height=500,
+        template="plotly_dark",
+        xaxis_rangeslider_visible=False,
+        margin=dict(l=0, r=0, t=30, b=0)
+    )
+    return fig
+
+# --- 4. MOTEUR D'ACQUISITION V11 ---
+@st.cache_data(ttl=300)
+def fetch_deep_data(grid_size):
+    # Données étendues pour le graphique
+    exchange = ccxt.coinbase()
     try:
-        # 1. COINBASE (PRIX)
-        exchange = ccxt.coinbase()
-        bars = exchange.fetch_ohlcv("BTC/USD", timeframe="1h", limit=100)
+        bars = exchange.fetch_ohlcv("BTC/USD", timeframe="1h", limit=500)
         df = pd.DataFrame(bars, columns=['ts', 'open', 'high', 'low', 'close', 'vol'])
         df['ts'] = pd.to_datetime(df['ts'], unit='ms')
-        current_price = df.iloc[-1]['close']
-        
-        # 2. PIVOT CALCUL (4H Synthétique)
-        df_4h = df.set_index('ts').resample('4h').agg({'open':'first', 'close':'last'}).dropna().reset_index()
-        last_ts = df_4h.iloc[-1]['ts']
-        # Trouver le dernier Lundi 16h
-        days_delta = last_ts.weekday()
-        monday = (last_ts - timedelta(days=days_delta)).replace(hour=0, minute=0, second=0)
-        pivot_target = monday + timedelta(hours=16)
-        
-        pivot_row = df_4h[df_4h['ts'] == pivot_target]
-        pivot_price = pivot_row.iloc[0]['open'] if not pivot_row.empty else df_4h.iloc[-1]['open']
-        
-        # 3. MACRO & NEWS
-        try:
-            dxy = yf.Ticker("DX-Y.NYB").history(period="2d")
-            dxy_val = dxy['Close'].iloc[-1]
-            dxy_trend = "HAUSSIER 🔴" if dxy_val > dxy['Close'].iloc[0] else "BAISSIER 🟢"
-        except: dxy_trend = "N/A"
-        
-        news = []
-        try:
-            feed = feedparser.parse("https://www.coindesk.com/arc/outboundfeeds/rss/")
-            if feed.entries: news = [e.title for e in feed.entries[:2]]
-        except: news = ["Pas de news"]
+    except: return None
 
-        # 4. GRILLE
-        dist = (current_price - pivot_price) % grid_size
-        if dist > (grid_size/2): dist -= grid_size
-        
-        return {
-            "price": current_price,
-            "pivot": pivot_price,
-            "dist": dist,
-            "dxy": dxy_trend,
-            "news": news,
-            "vol_spike": df.iloc[-1]['vol'] > df['vol'].mean()
-        }
-    except Exception as e:
-        return {"error": str(e)}
+    current_price = df.iloc[-1]['close']
+    
+    # Calcul Pivot Lundi (Précis)
+    df_4h = df.set_index('ts').resample('4h').agg({'open':'first', 'close':'last'}).dropna().reset_index()
+    last_ts = df_4h.iloc[-1]['ts']
+    monday = (last_ts - timedelta(days=last_ts.weekday())).replace(hour=0, minute=0, second=0)
+    pivot_row = df_4h[df_4h['ts'] == monday + timedelta(hours=16)]
+    pivot_price = pivot_row.iloc[0]['open'] if not pivot_row.empty else df_4h.iloc[-1]['open']
 
-# --- 4. CERVEAU IA ---
-def ask_guardian(context, tf):
+    # Calcul des lignes de Grille à afficher (+/- 2 niveaux)
+    grid_levels = []
+    base_grid = pivot_price
+    for i in range(-2, 3):
+        grid_levels.append(base_grid + (i * grid_size))
+
+    # Macro & News
+    try:
+        dxy = yf.Ticker("DX-Y.NYB").history(period="2d")
+        dxy_trend = "HAUSSIER (Risk Off)" if dxy['Close'].iloc[-1] > dxy['Close'].iloc[0] else "BAISSIER (Risk On)"
+    except: dxy_trend = "N/A"
+
+    try:
+        feed = feedparser.parse("https://www.coindesk.com/arc/outboundfeeds/rss/")
+        news = [e.title for e in feed.entries[:3]]
+    except: news = []
+
+    return {
+        "df": df,
+        "price": current_price,
+        "pivot": pivot_price,
+        "grid_levels": grid_levels,
+        "dxy": dxy_trend,
+        "news": news,
+        "grid_dist": (current_price - pivot_price) % grid_size
+    }
+
+# --- 5. ANALYSTE IA AVANCÉ ---
+def ask_titan_brain(context, timeframe):
     prompt = f"""
-    ROLE: Trader Algorithmique (Quantum V10).
-    DATA: {context}
-    TIMEFRAME: {tf}
+    ROLE: Stratège Trading Crypto Institutionnel (Quantum V11).
+    CONTEXTE: {context}
+    TIMEFRAME: {timeframe}
     
-    RÈGLES STRICTES:
-    - Si TF=1H: Regarde Volatilité.
-    - Si TF=4H: Regarde Position vs Pivot.
-    - Si TF=DAILY: Regarde Cycle.
+    TA MISSION : Rédiger un Rapport Tactique Complet.
+    Ne donne pas de JSON. Rédige en MARKDOWN propre et aéré.
     
-    OUTPUT JSON SEULEMENT:
-    {{
-        "signal": "ACHAT" | "VENTE" | "ATTENTE",
-        "color": "card-bullish" | "card-bearish" | "card-neutral",
-        "entry": "Prix ou 'Market'",
-        "stop": "Prix",
-        "target": "Prix",
-        "reason": "Explication technique brève (max 10 mots)",
-        "edu": "Vulgarisation simple (max 15 mots)"
-    }}
+    STRUCTURE DE TA RÉPONSE :
+    ### 🎯 VERDICT : [ACHAT / VENTE / ATTENTE] (En Gras)
+    
+    **1. ANALYSE TECHNIQUE**
+    Explique la position par rapport au Pivot et à la Grille Gann. Parle du Volume.
+    
+    **2. LE PLAN DE BATAILLE**
+    - **Zone d'Entrée Idéale :** [Prix]
+    - **Stop Loss (Invalidation) :** [Prix]
+    - **Cibles (TP1 / TP2) :** [Prix]
+    
+    **3. EXPLICATION (Vulgarisation)**
+    Une phrase simple avec une métaphore (ex: ressort, plafond de verre) pour que l'utilisateur comprenne la physique du mouvement.
     """
     try:
         model = genai.GenerativeModel("gemini-2.0-flash")
-        resp = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
-        return json.loads(resp.text)
-    except:
-        return {"signal": "ERREUR", "color": "card-neutral", "reason": "IA indisponible"}
+        resp = model.generate_content(prompt)
+        return resp.text
+    except Exception as e:
+        return f"⚠️ Erreur IA : {str(e)}"
 
-# --- 5. INTERFACE DASHBOARD ---
+# --- 6. INTERFACE UTILISATEUR V11 ---
 
 # Sidebar
 with st.sidebar:
-    st.title("⚙️ RÉGLAGES")
-    grid = st.slider("Grille ($)", 5000, 7000, 5760)
-    st.caption("Quantum Core V10.5 Active")
-    if st.button("Rafraîchir Données"):
-        st.cache_data.clear()
-        st.rerun()
+    st.header("🎛️ CONTRÔLE")
+    grid_size = st.number_input("Vibration Gann ($)", value=5760, step=10)
+    if st.button("🔄 Rafraîchir Système"): st.cache_data.clear()
+    st.markdown("---")
+    st.caption("Quantum Core V11.0 Titan")
 
-# Header
-st.title("🛡️ QUANTUM COMMAND")
-st.markdown("---")
+# En-tête Dashboard
+st.title("🛡️ QUANTUM TITAN")
+data = fetch_deep_data(grid_size)
 
-# Chargement avec Spinner
-with st.spinner("📡 SCANNING DES MARCHÉS EN COURS..."):
-    data = fetch_data_v10(grid)
+if data:
+    # BANDEAU HAUT (MÉTRIQUES CLÉS)
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("BITCOIN (Live)", f"${data['price']:,.0f}")
+    k2.metric("PIVOT HEBDO", f"${data['pivot']:,.0f}", delta_color="off")
+    k3.metric("DIST. GRILLE", f"{data['grid_dist']:.0f} $", "Prochain niveau")
+    k4.metric("MACRO DXY", data['dxy'])
 
-if "error" in data:
-    st.error(f"ÉCHEC CONNEXION : {data['error']}")
-else:
-    # BANDEAU MACRO
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("BITCOIN", f"${data['price']:,.0f}")
-    m2.metric("PIVOT LUNDI", f"${data['pivot']:,.0f}", f"{data['dist']:,.0f} diff")
-    m3.metric("DOLLAR (DXY)", data['dxy'])
-    m4.caption(f"News: {data['news'][0][:30]}...")
+    # ONGLETS DE NAVIGATION (Le Secret de la lisibilité)
+    tab1, tab2, tab3 = st.tabs(["⚡ 1H (SCALP)", "⚔️ 4H (SWING)", "🏛️ DAILY (MACRO)"])
 
-    st.markdown("### ⚡ CARTES DE MISSION")
-    
-    c1, c2, c3 = st.columns(3)
-
-    # --- 1H ---
-    with c1:
-        st.markdown("**SCALPING (1H)**")
-        if st.button("ANALYSER 1H", key="btn1h", use_container_width=True):
-            verdict = ask_guardian(str(data), "1H")
-            st.session_state['v1h'] = verdict
+    # --- ONGLET 1H ---
+    with tab1:
+        st.subheader("Analyse Cinétique & Inertie")
+        col_graph, col_ana = st.columns([2, 1]) # Graphique prend 2/3 de la place
         
-        if 'v1h' in st.session_state:
-            v = st.session_state['v1h']
-            st.markdown(f"""
-            <div class="trade-card {v['color']}">
-                <h2>{v['signal']}</h2>
-                <div class="big-price">@{v['entry']}</div>
-                <hr>
-                <p>🛑 <b>SL:</b> {v['stop']} | 🏁 <b>TP:</b> {v['target']}</p>
-                <p class="sub-text">🤖 {v['reason']}</p>
-            </div>
-            """, unsafe_allow_html=True)
-            with st.expander("Comprendre"):
-                st.info(v['edu'])
-            if st.button("💾 Journal", key="j1"): st.toast("Trade Archivé !")
+        with col_graph:
+            # On affiche les 48 dernières heures seulement pour le zoom 1H
+            st.plotly_chart(plot_quantum_chart(data['df'].tail(48), data['pivot'], data['grid_levels'], "BTC/USD - 1H View"), use_container_width=True)
+        
+        with col_ana:
+            st.info("💡 Cliquez ci-dessous pour l'analyse IA")
+            if st.button("LANCER LE SCAN 1H", key="btn_1h", type="primary"):
+                with st.spinner("Le Gardien analyse l'inertie..."):
+                    report = ask_titan_brain(f"Prix: {data['price']}, Pivot: {data['pivot']}", "1H")
+                    st.markdown(report)
+                    st.button("💾 Enregistrer Trade", key="save1")
 
-    # --- 4H ---
-    with c2:
-        st.markdown("**TACTIQUE (4H)**")
-        if st.button("ANALYSER 4H", key="btn4h", use_container_width=True):
-            verdict = ask_guardian(str(data), "4H")
-            st.session_state['v4h'] = verdict
+    # --- ONGLET 4H ---
+    with tab2:
+        st.subheader("Stratégie Hebdomadaire (Le Juge de Paix)")
+        col_graph4, col_ana4 = st.columns([2, 1])
+        
+        with col_graph4:
+            # Vue plus large (14 jours)
+            # Resample local pour l'affichage
+            df_4h_view = data['df'].set_index('ts').resample('4h').agg({'open':'first', 'high':'max', 'low':'min', 'close':'last'}).dropna().reset_index()
+            st.plotly_chart(plot_quantum_chart(df_4h_view.tail(84), data['pivot'], data['grid_levels'], "BTC/USD - 4H Structure"), use_container_width=True)
             
-        if 'v4h' in st.session_state:
-            v = st.session_state['v4h']
-            st.markdown(f"""
-            <div class="trade-card {v['color']}">
-                <h2>{v['signal']}</h2>
-                <div class="big-price">@{v['entry']}</div>
-                <hr>
-                <p>🛑 <b>SL:</b> {v['stop']} | 🏁 <b>TP:</b> {v['target']}</p>
-                <p class="sub-text">🤖 {v['reason']}</p>
-            </div>
-            """, unsafe_allow_html=True)
-            with st.expander("Comprendre"):
-                st.info(v['edu'])
-            if st.button("💾 Journal", key="j2"): st.toast("Trade Archivé !")
+        with col_ana4:
+            st.warning("⚠️ Attention à la règle du Jeudi 16h")
+            if st.button("LANCER LE SCAN 4H", key="btn_4h", type="primary"):
+                with st.spinner("Le Gardien vérifie la structure..."):
+                    report = ask_titan_brain(f"Prix: {data['price']}, Pivot: {data['pivot']}", "4H")
+                    st.markdown(report)
+                    st.button("💾 Enregistrer Trade", key="save2")
 
-    # --- DAILY ---
-    with c3:
-        st.markdown("**STRATÈGE (DAILY)**")
-        st.markdown(f"""
-        <div class="trade-card card-neutral">
-            <h2>INFO CYCLE</h2>
-            <div class="big-price">${data['price']+5760:,.0f}</div>
-            <p class="sub-text">Prochaine Grille Majeure</p>
-            <hr>
-            <p>Cycle Macro : <b>HIVER (Contraction)</b></p>
-        </div>
-        """, unsafe_allow_html=True)
-        with st.expander("Voir Analyse Globale"):
-            st.write("Le cycle de 4 ans impose une prudence vendeuse.")
+    # --- ONGLET DAILY ---
+    with tab3:
+        st.subheader("Vision Long Terme (Saisons)")
+        st.markdown(f"**NEWS EN TEMPS RÉEL :**")
+        for n in data['news']:
+            st.write(f"📰 {n}")
+        
+        st.markdown("---")
+        if st.button("ANALYSE MACRO COMPLÈTE", key="btn_daily"):
+             with st.spinner("Lecture des cycles planétaires..."):
+                    report = ask_titan_brain(f"Prix: {data['price']}, Tendance DXY: {data['dxy']}", "DAILY")
+                    st.markdown(report)
+
+else:
+    st.error("Erreur de connexion aux marchés. Vérifiez l'API.")
+    
