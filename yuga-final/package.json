@@ -1,0 +1,23 @@
+{
+  "name": "yuga-atlas-final-remotion",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "render:fr": "remotion render src/index.tsx YugaFinalFR out/Yuga_Grande_Transition_FR_FINAL.mp4 --codec=h264 --crf=14 --audio-codec=aac --audio-bitrate=320k --pixel-format=yuv420p --concurrency=2",
+    "render:en": "remotion render src/index.tsx YugaFinalEN out/Yuga_Great_Transition_EN_FINAL.mp4 --codec=h264 --crf=14 --audio-codec=aac --audio-bitrate=320k --pixel-format=yuv420p --concurrency=2",
+    "poster:fr": "remotion still src/index.tsx YugaPosterFR out/Yuga_Grande_Transition_FR_POSTER.png",
+    "poster:en": "remotion still src/index.tsx YugaPosterEN out/Yuga_Great_Transition_EN_POSTER.png"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.496",
+    "@remotion/media": "4.0.496",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "remotion": "4.0.496"
+  },
+  "devDependencies": {
+    "@types/react": "19.1.8",
+    "@types/react-dom": "19.1.6",
+    "typescript": "5.8.3"
+  }
+}
