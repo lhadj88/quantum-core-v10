@@ -58,24 +58,23 @@ jobs:
       - name: Render English master
         run: npm run render:en
       - name: Technical validation
-        run: |
-          ffprobe -v error -show_entries format=duration -show_entries stream=codec_name,width,height,r_frame_rate,sample_rate,channels -of json out/Yuga_Studio_FR.mp4 > out/ffprobe-fr.json
-          ffprobe -v error -show_entries format=duration -show_entries stream=codec_name,width,height,r_frame_rate,sample_rate,channels -of json out/Yuga_Studio_EN.mp4 > out/ffprobe-en.json
-          test "$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 out/Yuga_Studio_FR.mp4)" = "1080"
-          test "$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 out/Yuga_Studio_FR.mp4)" = "1920"
-          sha256sum out/*.mp4 > out/SHA256SUMS.txt
+        run: python scripts/verify-output.py
       - name: Build QC contact sheet
+        if: always()
         run: |
-          ffmpeg -y -pattern_type glob -i 'out/qc/frame-*.png' -vf "scale=270:480,tile=4x2" -frames:v 1 out/qc/contact-sheet.png
+          if compgen -G 'out/qc/frame-*.png' > /dev/null; then
+            ffmpeg -y -pattern_type glob -i 'out/qc/frame-*.png' -vf "scale=270:480,tile=4x2" -frames:v 1 out/qc/contact-sheet.png
+          fi
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: yuga-remotion-studio-masters
           path: |
             yuga-remotion-studio/out/Yuga_Studio_FR.mp4
             yuga-remotion-studio/out/Yuga_Studio_EN.mp4
             yuga-remotion-studio/out/SHA256SUMS.txt
-            yuga-remotion-studio/out/ffprobe-fr.json
-            yuga-remotion-studio/out/ffprobe-en.json
+            yuga-remotion-studio/out/TECHNICAL_REPORT.json
+            yuga-remotion-studio/out/ffprobe-*.json
             yuga-remotion-studio/out/qc/*.png
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
