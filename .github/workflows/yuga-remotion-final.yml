@@ -1,0 +1,150 @@
+name: Yuga Remotion Final Production
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - render-yuga-remotion-final-20260725
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout production branch
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install system production dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg zip fonts-ebgaramond fonts-inter python3-numpy python3-scipy
+
+      - name: Reconstruct approved cover assets
+        run: |
+          mkdir -p yuga-final/public/assets yuga-final/public/audio
+          cat render-assets/cover-fr.part* | tr -d '\n\r ' | base64 --decode > yuga-final/public/assets/cover-fr.webp
+          cat render-assets/cover-en.part* | tr -d '\n\r ' | base64 --decode > yuga-final/public/assets/cover-en.webp
+          cd yuga-final
+          file public/assets/cover-fr.webp
+          file public/assets/cover-en.webp
+          test -s public/assets/cover-fr.webp
+          test -s public/assets/cover-en.webp
+          sed -i 's#assets/cover-fr.jpg#assets/cover-fr.webp#g; s#assets/cover-en.png#assets/cover-en.webp#g' src/index.tsx
+          grep -q 'assets/cover-fr.webp' src/index.tsx
+          grep -q 'assets/cover-en.webp' src/index.tsx
+
+      - name: Generate final original soundtrack
+        working-directory: yuga-final
+        run: |
+          python3 scripts/generate_audio.py
+          test -s public/audio/yuga-final.wav
+          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 public/audio/yuga-final.wav
+
+      - name: Install Remotion dependencies
+        working-directory: yuga-final
+        run: npm install --no-audit --no-fund
+
+      - name: Validate native Remotion compositions
+        working-directory: yuga-final
+        run: npx remotion compositions src/index.tsx
+
+      - name: Render native key frames
+        working-directory: yuga-final
+        run: |
+          mkdir -p out/qc/fr
+          for frame in 72 210 360 510 690 810 930 1050; do
+            npx remotion still src/index.tsx YugaFinalFR "out/qc/fr/frame-${frame}.png" --frame="$frame"
+          done
+
+      - name: Render French native master
+        working-directory: yuga-final
+        run: |
+          mkdir -p out
+          npx remotion render src/index.tsx YugaFinalFR out/Yuga_Atlas_Master_FR_Final.mp4 --codec=h264 --crf=14 --audio-codec=aac --audio-bitrate=320k --pixel-format=yuv420p --concurrency=2
+
+      - name: Render English native master
+        working-directory: yuga-final
+        run: |
+          npx remotion render src/index.tsx YugaFinalEN out/Yuga_Atlas_Master_EN_Final.mp4 --codec=h264 --crf=14 --audio-codec=aac --audio-bitrate=320k --pixel-format=yuv420p --concurrency=2
+
+      - name: Render native posters
+        working-directory: yuga-final
+        run: |
+          npx remotion still src/index.tsx YugaPosterFR out/Yuga_Atlas_Poster_FR_Final.png
+          npx remotion still src/index.tsx YugaPosterEN out/Yuga_Atlas_Poster_EN_Final.png
+
+      - name: Decode and validate final masters
+        working-directory: yuga-final
+        run: |
+          ffmpeg -v error -i out/Yuga_Atlas_Master_FR_Final.mp4 -f null -
+          ffmpeg -v error -i out/Yuga_Atlas_Master_EN_Final.mp4 -f null -
+          ffprobe -v error -show_streams -show_format -of json out/Yuga_Atlas_Master_FR_Final.mp4 > out/ffprobe-fr.json
+          ffprobe -v error -show_streams -show_format -of json out/Yuga_Atlas_Master_EN_Final.mp4 > out/ffprobe-en.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          for lang in ('fr', 'en'):
+              data = json.loads(Path(f'out/ffprobe-{lang}.json').read_text())
+              video = next(s for s in data['streams'] if s['codec_type'] == 'video')
+              audio = next(s for s in data['streams'] if s['codec_type'] == 'audio')
+              duration = float(data['format']['duration'])
+              assert video['codec_name'] == 'h264', video
+              assert int(video['width']) == 1080 and int(video['height']) == 1920, video
+              assert video['r_frame_rate'] == '30/1', video
+              assert audio['codec_name'] == 'aac', audio
+              assert int(audio['sample_rate']) == 48000, audio
+              assert 35.90 <= duration <= 36.10, duration
+          print('Native master validation passed.')
+          PY
+
+      - name: Build contact sheet and source archive
+        working-directory: yuga-final
+        run: |
+          ffmpeg -y -framerate 1 -pattern_type glob -i 'out/qc/fr/frame-*.png' -vf 'scale=270:480,tile=4x2' -frames:v 1 out/qc/contact-sheet-fr.png
+          mkdir -p out/source
+          cp package.json tsconfig.json remotion.config.ts FINAL_PRODUCTION.md out/source/
+          cp -R src scripts out/source/
+          cp -R public/assets out/source/assets
+          cp public/audio/yuga-final.wav out/source/yuga-final.wav
+          cd out/source
+          zip -qr ../Yuga_Remotion_Final_Source.zip .
+
+      - name: Write QA report and checksums
+        working-directory: yuga-final
+        run: |
+          cat > out/QA_REPORT.md <<'EOF'
+          # Yuga Remotion Final Production — QA
+
+          - Engine: Native Remotion 4.0.496
+          - Compositions: YugaFinalFR and YugaFinalEN
+          - Dimensions: 1080 × 1920
+          - Frame rate: 30 fps
+          - Duration: 36 seconds / 1080 frames
+          - Video: H.264, CRF 14, yuv420p
+          - Audio: original soundtrack, AAC 320 kb/s, 48 kHz
+          - Covers: approved French and English artwork supplied by the author
+          - Voice-over: none, by creative direction
+          - Full-decode test: passed for both masters
+          - ffprobe contract: passed for both masters
+          - Key-frame render: passed
+          - Posters: rendered natively
+          EOF
+          cd out
+          sha256sum Yuga_Atlas_Master_FR_Final.mp4 Yuga_Atlas_Master_EN_Final.mp4 Yuga_Atlas_Poster_FR_Final.png Yuga_Atlas_Poster_EN_Final.png Yuga_Remotion_Final_Source.zip > SHA256SUMS.txt
+
+      - name: Upload final production artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: yuga-remotion-final-production
+          path: yuga-final/out
+          if-no-files-found: error
+          retention-days: 30
