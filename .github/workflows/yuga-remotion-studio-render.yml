@@ -6,6 +6,11 @@ on:
     paths:
       - 'yuga-remotion-studio/**'
       - '.github/workflows/yuga-remotion-studio-render.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'yuga-remotion-studio/**'
+      - '.github/workflows/yuga-remotion-studio-render.yml'
 permissions:
   contents: read
 jobs:
