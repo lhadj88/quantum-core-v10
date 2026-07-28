@@ -1,0 +1,59 @@
+name: Export Public Binance BTCUSDT UM 4H 2023
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download and consolidate public monthly archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/public_binance_2023/monthly
+          output="artifacts/public_binance_2023/BTCUSDT_UM_PERP_4h_2023.csv"
+          : > "$output"
+          for month in $(seq -w 1 12); do
+            zip="BTCUSDT-4h-2023-${month}.zip"
+            url="https://data.binance.vision/data/futures/um/monthly/klines/BTCUSDT/4h/${zip}"
+            curl --fail --location --retry 5 --retry-delay 2 --output "artifacts/public_binance_2023/monthly/${zip}" "$url"
+            unzip -p "artifacts/public_binance_2023/monthly/${zip}" "*.csv" >> "$output"
+          done
+          python - <<'PY'
+          import csv
+          from pathlib import Path
+          p = Path('artifacts/public_binance_2023/BTCUSDT_UM_PERP_4h_2023.csv')
+          rows = []
+          with p.open(newline='', encoding='utf-8') as f:
+              for row in csv.reader(f):
+                  if not row:
+                      continue
+                  try:
+                      int(float(row[0]))
+                  except ValueError:
+                      continue
+                  rows.append(row[:12])
+          rows.sort(key=lambda r: int(float(r[0])))
+          with p.open('w', newline='', encoding='utf-8') as f:
+              csv.writer(f).writerows(rows)
+          if len(rows) not in range(2180, 2200):
+              raise SystemExit(f'unexpected row count: {len(rows)}')
+          print({'rows': len(rows), 'first': rows[0][0], 'last': rows[-1][0]})
+          PY
+          sha256sum "$output" > artifacts/public_binance_2023/SHA256SUMS.txt
+          rm -rf artifacts/public_binance_2023/monthly
+      - name: Upload public data artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BTCUSDT_UM_PERP_4H_2023_PUBLIC
+          path: artifacts/public_binance_2023
+          if-no-files-found: error
+          retention-days: 7
