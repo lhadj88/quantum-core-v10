@@ -1,0 +1,93 @@
+        tr=data[data.timestamp<start]; te=data[(data.timestamp>=start)&(data.timestamp<end)]
+        year_preds={}
+        for name in primary_models:
+            probs=fit_predict(tr,te,feature_sets[name]); met,pf=evaluate(te,probs); met.update(year=year,model=name,train_n=len(tr)); annual.append(met); pf['year']=year; pf['model']=name; pred_all.append(pf); year_preds[name]=pf
+            print(year,name,met['raw_route_accuracy'],met['actionable_accuracy'],met['coverage'],flush=True)
+        s=year_preds['SPOT_ONLY_FIXED']; f=year_preds['SPOT_PERP_FULL_CENTRAL']; y=s.true_route.to_numpy(object)
+        paired[str(year)]={
+            'raw_full_minus_spot':block_bootstrap_delta(y,f.raw_prediction.to_numpy(object),s.raw_prediction.to_numpy(object)),
+            'common_actionable':None,
+        }
+        common=s.actionable.to_numpy(bool)&f.actionable.to_numpy(bool)
+        if common.any():
+            paired[str(year)]['common_actionable']={'n':int(common.sum()),'spot_accuracy':float(np.mean(s.decision.to_numpy(object)[common]==y[common])),'full_accuracy':float(np.mean(f.decision.to_numpy(object)[common]==y[common])),'paired':block_bootstrap_delta(y[common],f.decision.to_numpy(object)[common],s.decision.to_numpy(object)[common],block=21)}
+
+    annual_df=pd.DataFrame([{k:v for k,v in r.items() if not isinstance(v,(dict,list))} for r in annual]); annual_df.to_csv(OUT/'04_PRIMARY_WALK_FORWARD_SUMMARY.csv',index=False)
+    preds=pd.concat(pred_all,ignore_index=True); preds.to_csv(OUT/'05_PRIMARY_PREDICTIONS_2023_2025.csv',index=False)
+    (OUT/'06_PAIRED_FULL_VS_SPOT.json').write_text(json.dumps(paired,indent=2))
+
+    # Fixed through-2022 group diagnostics. No group is selected from exposed results.
+    tr=data[data.timestamp<pd.Timestamp('2023-01-01',tz='UTC')]; te=data[(data.timestamp>=pd.Timestamp('2023-01-01',tz='UTC'))&(data.timestamp<HARD_CUTOFF)]
+    diag=[]; diag_preds={}
+    for name,features in feature_sets.items():
+        probs=fit_predict(tr,te,features); met,pf=evaluate(te,probs); met.update(model=name,train_end='2022-12-31',test='2023-2025 exposed pooled'); diag.append(met); diag_preds[name]=pf
+        print('diagnostic',name,met['raw_route_accuracy'],met['actionable_accuracy'],met['coverage'],flush=True)
+    diag_df=pd.DataFrame([{k:v for k,v in r.items() if not isinstance(v,(dict,list))} for r in diag]); diag_df.to_csv(OUT/'07_CENTRAL_GROUP_ADDITION_DIAGNOSTICS.csv',index=False)
+    spotp=diag_preds['SPOT_ONLY_FIXED']; y=spotp.true_route.to_numpy(object); group_delta=[]
+    for name,pf in diag_preds.items():
+        if name=='SPOT_ONLY_FIXED': continue
+        res=block_bootstrap_delta(y,pf.raw_prediction.to_numpy(object),spotp.raw_prediction.to_numpy(object))
+        common=pf.actionable.to_numpy(bool)&spotp.actionable.to_numpy(bool)
+        row={'model':name,**{f'raw_{k}':v for k,v in res.items() if k!='ci95'},'raw_ci95_low':res['ci95'][0],'raw_ci95_high':res['ci95'][1],'common_action_n':int(common.sum())}
+        if common.any(): row.update(common_spot_accuracy=float(np.mean(spotp.decision.to_numpy(object)[common]==y[common])),common_model_accuracy=float(np.mean(pf.decision.to_numpy(object)[common]==y[common])))
+        group_delta.append(row)
+    pd.DataFrame(group_delta).to_csv(OUT/'08_GROUP_PAIRED_DELTAS_VS_SPOT.csv',index=False)
+
+    # Clock and annual stability for the full model.
+    full=preds[preds.model=='SPOT_PERP_FULL_CENTRAL'].copy(); full['hour']=pd.to_datetime(full.timestamp,utc=True).dt.hour
+    stab=[]
+    for dims in [['year'],['year','hour']]:
+        for keys,g in full.groupby(dims):
+            if not isinstance(keys,tuple): keys=(keys,)
+            act=g.actionable.to_numpy(bool); yy=g.true_route.to_numpy(object); dd=g.decision.to_numpy(object); rr=g.raw_prediction.to_numpy(object)
+            stab.append({'slice':'/'.join(dims),**dict(zip(dims,keys)),'n':len(g),'raw_accuracy':float(np.mean(rr==yy)),'coverage':float(act.mean()),'actionable_accuracy':float(np.mean(dd[act]==yy[act])) if act.any() else None})
+    pd.DataFrame(stab).to_csv(OUT/'09_FULL_MODEL_CLOCK_STABILITY.csv',index=False)
+
+    # Causal feature completeness.
+    feat_rows=[]
+    for name,features in feature_sets.items():
+        for c in features: feat_rows.append({'model':name,'feature':c,'missing_rate':float(data[c].isna().mean()),'finite_n':int(np.isfinite(data[c].to_numpy(float)).sum())})
+    pd.DataFrame(feat_rows).to_csv(OUT/'10_FEATURE_COMPLETENESS.csv',index=False)
+
+    # Governance and verdict.
+    full_ann=annual_df[annual_df.model=='SPOT_PERP_FULL_CENTRAL'].set_index('year')
+    gate=bool(((full_ann.actionable_accuracy>=0.70)&(full_ann.coverage>=0.20)).all())
+    robust_improvement=all(paired[str(y)]['raw_full_minus_spot']['delta']>0 and paired[str(y)]['raw_full_minus_spot']['p_one_sided_centered']<=0.05 for y in [2023,2024,2025])
+    summary={
+        'branch':'R13_SPOT_PERP_CENTRAL_BLOCK_FIXED_v0_1','R11_R12_modified':False,'2026_opened':False,'years_2023_2025_status':'fully exposed retrospective stress',
+        'target':'unchanged corrected H4 high/low competing-risk first passage H1-H12','model':'unchanged discrete-time multinomial competing-risk hazard',
+        'fixed_hyperparameters':{'alpha':ALPHA,'margin':MARGIN},'primary_annual':annual,'paired_full_vs_spot':paired,
+        'central_group_diagnostics':diag,'multiplicity':{'primary_models':2,'predeclared_group_additions':6,'full_model':1,'no_selection_on_2023_2025':True},
+        'scientific_gate':{'accuracy_ge_70_coverage_ge_20_each_year':gate,'robust_raw_improvement_vs_spot_each_year':robust_improvement},
+        'verdict':'CENTRAL_BLOCK_NOT_VALIDATED' if not(gate and robust_improvement) else 'ELIGIBLE_FOR_FUTURE_PREREGISTRATION_NOT_VALIDATED',
+        'terminology_note':'activity/liquidity variables are candle-level activity and price-impact proxies, not order-book depth',
+    }
+    (OUT/'11_SUMMARY.json').write_text(json.dumps(summary,indent=2,default=str))
+
+    report=['# R13 — bloc central spot–perpétuel','', '## Protocole', '', '- Cible et horizon corrigés inchangés.', '- Six clocks H4 UTC.', '- Hyperparamètres gelés : alpha 0,001 ; marge 0,15.', '- Développement antérieur à 2023. Les années 2023–2025 restent exposées et ne constituent pas un holdout.', '- Aucune donnée 2026 téléchargée ou ouverte.', '', '## Résultats primaires', '']
+    for y in [2023,2024,2025]:
+        for name in primary_models:
+            r=next(x for x in annual if x['year']==y and x['model']==name)
+            report.append(f"- {y} — {name}: route brute {r['raw_route_accuracy']:.2%}; décisions {r['actionable_accuracy']:.2%} sur {r['coverage']:.2%} de couverture.")
+        p=paired[str(y)]['raw_full_minus_spot']; report.append(f"  - Différence brute full−spot : {p['delta']:+.2%}; p bloc unilatérale {p['p_one_sided_centered']:.4f}.")
+    report += ['', '## Diagnostics par bloc ajouté', '']
+    for r in diag:
+        report.append(f"- {r['model']}: route brute {r['raw_route_accuracy']:.2%}; décisions {r['actionable_accuracy']:.2%} sur {r['coverage']:.2%}.")
+    report += ['', '## Verdict', '', f"**{summary['verdict']}**", '', 'Les variables dites de liquidité sont des proxys H4 d’activité et d’impact, pas une profondeur réelle de carnet. Aucun résultat de cette branche ne peut être qualifié de prospectif.']
+    (OUT/'00_MASTER_REPORT.md').write_text('\n'.join(report)+'\n',encoding='utf-8')
+
+    # Reproducibility package without raw archives.
+    shutil.copy2(Path(__file__),OUT/'run_r13_spot_perp_central.py')
+    hashes=[]
+    for p in sorted(OUT.rglob('*')):
+        if p.is_file() and p.name!='SHA256SUMS.txt': hashes.append(f'{sha256_file(p)}  {p.relative_to(OUT)}')
+    (OUT/'SHA256SUMS.txt').write_text('\n'.join(hashes)+'\n')
+    package=ROOT/'R13_SPOT_PERP_CENTRAL_BLOCK_FIXED_v0_1.zip'
+    with zipfile.ZipFile(package,'w',zipfile.ZIP_DEFLATED,compresslevel=9) as zf:
+        for p in sorted(OUT.rglob('*')):
+            if p.is_file(): zf.write(p,Path('R13_SPOT_PERP_CENTRAL_BLOCK_FIXED_v0_1')/p.relative_to(OUT))
+    (ROOT/'R13_SPOT_PERP_CENTRAL_BLOCK_FIXED_v0_1.zip.sha256').write_text(f'{sha256_file(package)}  {package.name}\n')
+    print('PACKAGE',package,sha256_file(package),flush=True)
+
+if __name__=='__main__':
+    main()
