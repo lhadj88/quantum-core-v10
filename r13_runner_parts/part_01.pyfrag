@@ -37,7 +37,8 @@ def build_dataset() -> tuple[pd.DataFrame, dict[str, list[str]], dict]:
 
     d = spot.merge(perp, on='timestamp', how='inner').merge(mark, on='timestamp', how='inner').merge(index, on='timestamp', how='inner').merge(premium, on='timestamp', how='inner')
     d = d.sort_values('timestamp').reset_index(drop=True)
-    d['decision_time'] = d.timestamp + pd.Timedelta(hours=4)
+    d['decision_time'] = (d.timestamp + pd.Timedelta(hours=4)).astype('datetime64[ns, UTC]')
+    funding['calc_time'] = funding['calc_time'].astype('datetime64[ns, UTC]')
     d = pd.merge_asof(d.sort_values('decision_time'), funding.sort_values('calc_time'), left_on='decision_time', right_on='calc_time', direction='backward', tolerance=pd.Timedelta(days=7))
     d = d.sort_values('timestamp').reset_index(drop=True)
     # A bar is eligible only when its decision close is still inside 2025.
