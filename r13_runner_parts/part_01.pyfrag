@@ -1,0 +1,127 @@
+        out[f'fund_mean_{w}'] = out.funding_rate.rolling(w, min_periods=1).mean()
+        out[f'fund_std_{w}'] = out.funding_rate.rolling(w, min_periods=2).std()
+        out[f'fund_sum_{w}'] = out.funding_rate.rolling(w, min_periods=1).sum()
+    out['fund_delta_1'] = out.funding_rate.diff()
+    out['fund_delta_3'] = out.funding_rate.diff(3)
+    return out
+
+
+def rolling_z(s: pd.Series, w: int) -> pd.Series:
+    mean = s.rolling(w, min_periods=max(12, w // 3)).mean()
+    std = s.rolling(w, min_periods=max(12, w // 3)).std()
+    return (s - mean) / (std + 1e-12)
+
+
+def rolling_rank(s: pd.Series, w: int) -> pd.Series:
+    return s.rolling(w, min_periods=max(30, w // 3)).rank(pct=True)
+
+
+def signed_run_length(s: pd.Series) -> pd.Series:
+    a = np.sign(s.fillna(0).to_numpy())
+    out = np.zeros(len(a), float); last = 0; run = 0
+    for i, v in enumerate(a):
+        if v == 0: run = 0
+        elif v == last: run += 1
+        else: run = 1
+        out[i] = run; last = v
+    return pd.Series(out, index=s.index)
+
+
+def build_dataset() -> tuple[pd.DataFrame, dict[str, list[str]], dict]:
+    spot = load_kline_kind('spot').add_prefix('spot_').rename(columns={'spot_timestamp':'timestamp'})
+    perp = load_kline_kind('perp').add_prefix('perp_').rename(columns={'perp_timestamp':'timestamp'})
+    mark = load_kline_kind('mark')[['timestamp','open','high','low','close']].add_prefix('mark_').rename(columns={'mark_timestamp':'timestamp'})
+    index = load_kline_kind('index')[['timestamp','open','high','low','close']].add_prefix('index_').rename(columns={'index_timestamp':'timestamp'})
+    premium = load_kline_kind('premium')[['timestamp','open','high','low','close']].add_prefix('premium_').rename(columns={'premium_timestamp':'timestamp'})
+    funding = load_funding()
+
+    d = spot.merge(perp, on='timestamp', how='inner').merge(mark, on='timestamp', how='inner').merge(index, on='timestamp', how='inner').merge(premium, on='timestamp', how='inner')
+    d = d.sort_values('timestamp').reset_index(drop=True)
+    d['decision_time'] = d.timestamp + pd.Timedelta(hours=4)
+    d = pd.merge_asof(d.sort_values('decision_time'), funding.sort_values('calc_time'), left_on='decision_time', right_on='calc_time', direction='backward', tolerance=pd.Timedelta(days=7))
+    d = d.sort_values('timestamp').reset_index(drop=True)
+    # A bar is eligible only when its decision close is still inside 2025.
+    d = d[d.decision_time < HARD_CUTOFF].reset_index(drop=True)
+
+    # Spot base: same causal state family used by the corrected branch, compacted to robust primitives.
+    sret = np.log(d.spot_close).diff(); pret = np.log(d.perp_close).diff()
+    pol = np.sign(sret).replace(0, np.nan)
+    d['polarity'] = pol; d['spot_r1'] = sret; d['perp_r1'] = pret; d['abs_r1'] = sret.abs()
+    d['spot_range_log'] = np.log(d.spot_high / d.spot_low)
+    d['spot_body_range'] = (d.spot_close-d.spot_open).abs()/(d.spot_high-d.spot_low+1e-12)
+    d['spot_cloc'] = 2*(d.spot_close-d.spot_low)/(d.spot_high-d.spot_low+1e-12)-1
+    upper=d.spot_high-np.maximum(d.spot_open,d.spot_close); lower=np.minimum(d.spot_open,d.spot_close)-d.spot_low
+    d['spot_wick_asym']=(upper-lower)/(d.spot_high-d.spot_low+1e-12)
+    d['spot_taker_imb']=2*d.spot_taker_buy_quote/(d.spot_quote_volume+1e-12)-1
+    d['aligned_spot_taker']=pol*d.spot_taker_imb
+    d['spot_log_qvol']=np.log1p(d.spot_quote_volume); d['spot_log_trades']=np.log1p(d.spot_trades)
+    d['spot_avg_trade']=d.spot_quote_volume/(d.spot_trades+1e-12)
+    d['spot_impact']=sret.abs()/(d.spot_quote_volume+1e-12)*1e9
+    d['spot_run_length']=signed_run_length(sret)
+    for w in [3,6,12,24,72,144]:
+        d[f'spot_ret_{w}']=sret.rolling(w,min_periods=w).sum()
+        d[f'spot_vol_{w}']=sret.rolling(w,min_periods=w).std()
+    d['pre_vol24']=d.spot_vol_24.shift(1)
+    d['shock_to_prevol']=d.abs_r1/(d.pre_vol24+1e-12)
+    for c in ['abs_r1','spot_range_log','aligned_spot_taker','spot_log_qvol','spot_log_trades','spot_avg_trade','spot_impact']:
+        d[f'{c}_rank180']=rolling_rank(d[c],180); d[f'{c}_rank720']=rolling_rank(d[c],720)
+    hour=d.timestamp.dt.hour; dow=d.timestamp.dt.dayofweek
+    d['hour_sin']=np.sin(2*np.pi*hour/24); d['hour_cos']=np.cos(2*np.pi*hour/24)
+    d['dow_sin']=np.sin(2*np.pi*dow/7); d['dow_cos']=np.cos(2*np.pi*dow/7)
+
+    spot_features = [
+        'polarity','spot_r1','abs_r1','spot_range_log','spot_body_range','spot_cloc','spot_wick_asym',
+        'spot_taker_imb','aligned_spot_taker','spot_log_qvol','spot_log_trades','spot_avg_trade','spot_impact',
+        'spot_run_length','pre_vol24','shock_to_prevol','hour_sin','hour_cos','dow_sin','dow_cos',
+    ] + [c for c in d.columns if c.startswith(('spot_ret_','spot_vol_'))] + [c for c in d.columns if c.endswith(('rank180','rank720'))]
+
+    groups: dict[str,list[str]] = {}
+
+    # 1. Leadership: causal lagged cross-market transmission measures.
+    d['ret_gap_1']=pret-sret; d['aligned_ret_gap_1']=pol*d.ret_gap_1
+    for w in [3,6,12]:
+        d[f'perp_ret_{w}']=pret.rolling(w,min_periods=w).sum(); d[f'ret_gap_{w}']=d[f'perp_ret_{w}']-d[f'spot_ret_{w}']
+    for w in [24,72,144]:
+        d[f'corr_spot_leads_{w}']=sret.shift(1).rolling(w,min_periods=w//2).corr(pret)
+        d[f'corr_perp_leads_{w}']=pret.shift(1).rolling(w,min_periods=w//2).corr(sret)
+        d[f'leadership_score_{w}']=d[f'corr_perp_leads_{w}']-d[f'corr_spot_leads_{w}']
+    groups['leadership']=['perp_r1','ret_gap_1','aligned_ret_gap_1']+[f'perp_ret_{w}' for w in [3,6,12]]+[f'ret_gap_{w}' for w in [3,6,12]]+[f'{p}_{w}' for w in [24,72,144] for p in ['corr_spot_leads','corr_perp_leads','leadership_score']]
+
+    # 2. Basis and premium.
+    d['basis_log']=np.log(d.perp_close/d.index_close)
+    d['premium_close']=d.premium_close
+    d['premium_range']=d.premium_high-d.premium_low
+    for c in ['basis_log','premium_close','premium_range']:
+        d[f'{c}_d1']=d[c].diff(); d[f'{c}_d3']=d[c].diff(3)
+        d[f'{c}_z24']=rolling_z(d[c],24); d[f'{c}_z72']=rolling_z(d[c],72); d[f'aligned_{c}']=pol*d[c]
+    groups['basis_premium']=[c for c in d.columns if c.startswith(('basis_log','premium_close','premium_range','aligned_basis','aligned_premium'))]
+
+    # 3. Mark-index divergence.
+    d['mark_index_log']=np.log(d.mark_close/d.index_close); d['mark_perp_log']=np.log(d.mark_close/d.perp_close)
+    for c in ['mark_index_log','mark_perp_log']:
+        d[f'{c}_d1']=d[c].diff(); d[f'{c}_d3']=d[c].diff(3); d[f'{c}_z24']=rolling_z(d[c],24); d[f'{c}_z72']=rolling_z(d[c],72); d[f'aligned_{c}']=pol*d[c]
+    groups['mark_index']=[c for c in d.columns if c.startswith(('mark_index','mark_perp','aligned_mark'))]
+
+    # 4. Funding available as of the current H4 close.
+    d['aligned_funding']=pol*d.funding_rate
+    d['fund_age_hours']=(d.decision_time-d.calc_time).dt.total_seconds()/3600
+    groups['funding']=['funding_rate','funding_interval_hours','fund_delta_1','fund_delta_3','aligned_funding','fund_age_hours']+[f'fund_{stat}_{w}' for w in [3,9,21] for stat in ['mean','std','sum']]
+
+    # 5. Comparative aggressive-flow efficiency.
+    d['perp_taker_imb']=2*d.perp_taker_buy_quote/(d.perp_quote_volume+1e-12)-1
+    d['flow_gap']=d.perp_taker_imb-d.spot_taker_imb; d['aligned_flow_gap']=pol*d.flow_gap
+    d['spot_flow_eff']=sret/(d.spot_taker_imb.abs()+0.05); d['perp_flow_eff']=pret/(d.perp_taker_imb.abs()+0.05)
+    d['flow_eff_gap']=d.perp_flow_eff-d.spot_flow_eff
+    d['spot_absorption']=pol*d.spot_taker_imb-pol*d.spot_cloc
+    perp_cloc=2*(d.perp_close-d.perp_low)/(d.perp_high-d.perp_low+1e-12)-1
+    d['perp_absorption']=pol*d.perp_taker_imb-pol*perp_cloc
+    d['absorption_gap']=d.perp_absorption-d.spot_absorption
+    for c in ['flow_gap','flow_eff_gap','absorption_gap']:
+        d[f'{c}_z24']=rolling_z(d[c],24); d[f'{c}_z72']=rolling_z(d[c],72)
+    groups['flow_efficiency']=['perp_taker_imb','flow_gap','aligned_flow_gap','spot_flow_eff','perp_flow_eff','flow_eff_gap','spot_absorption','perp_absorption','absorption_gap']+[f'{c}_z{w}' for c in ['flow_gap','flow_eff_gap','absorption_gap'] for w in [24,72]]
+
+    # 6. Comparative activity/liquidity proxies. These are not order-book depth.
+    d['perp_log_qvol']=np.log1p(d.perp_quote_volume); d['perp_log_trades']=np.log1p(d.perp_trades)
+    d['perp_avg_trade']=d.perp_quote_volume/(d.perp_trades+1e-12)
+    d['qvol_log_ratio']=np.log((d.perp_quote_volume+1)/(d.spot_quote_volume+1))
+    d['trades_log_ratio']=np.log((d.perp_trades+1)/(d.spot_trades+1))
