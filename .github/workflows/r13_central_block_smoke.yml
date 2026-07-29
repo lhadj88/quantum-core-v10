@@ -1,0 +1,29 @@
+name: R13 central block smoke
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download one official Binance archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          url='https://data.binance.vision/data/futures/um/monthly/klines/BTCUSDT/4h/BTCUSDT-4h-2025-12.zip'
+          curl --fail --location --retry 3 "$url" -o out/BTCUSDT-4h-2025-12.zip
+          unzip -t out/BTCUSDT-4h-2025-12.zip
+          sha256sum out/BTCUSDT-4h-2025-12.zip > out/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r13-central-block-smoke
+          path: out/
+          retention-days: 1
