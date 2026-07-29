@@ -1,0 +1,84 @@
+name: Export Public Binance BTCUSDT Multi-Measure 2020-2024
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download and consolidate public Binance Vision archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="artifacts/public_binance_multimeasure"
+          mkdir -p "$root/raw"
+          declare -A folders
+          folders[perp]="klines"
+          folders[mark]="markPriceKlines"
+          folders[index]="indexPriceKlines"
+          folders[premium]="premiumIndexKlines"
+          for series in perp mark index premium; do
+            output="$root/BTCUSDT_${series}_4h_2020_2024.csv"
+            : > "$output"
+            for year in 2020 2021 2022 2023 2024; do
+              for month in $(seq -w 1 12); do
+                zip="BTCUSDT-4h-${year}-${month}.zip"
+                url="https://data.binance.vision/data/futures/um/monthly/${folders[$series]}/BTCUSDT/4h/${zip}"
+                path="$root/raw/${series}_${zip}"
+                curl --fail --location --retry 5 --retry-delay 2 --output "$path" "$url"
+                unzip -p "$path" "*.csv" >> "$output"
+              done
+            done
+          done
+          python - <<'PY'
+          import csv, json
+          from pathlib import Path
+          root = Path('artifacts/public_binance_multimeasure')
+          audit = {}
+          for path in sorted(root.glob('BTCUSDT_*_4h_2020_2024.csv')):
+              rows = []
+              with path.open(newline='', encoding='utf-8') as f:
+                  for row in csv.reader(f):
+                      if not row:
+                          continue
+                      try:
+                          int(float(row[0]))
+                      except ValueError:
+                          continue
+                      rows.append(row)
+              rows.sort(key=lambda r: int(float(r[0])))
+              dedup = {}
+              for row in rows:
+                  dedup[int(float(row[0]))] = row
+              rows = [dedup[k] for k in sorted(dedup)]
+              with path.open('w', newline='', encoding='utf-8') as f:
+                  csv.writer(f).writerows(rows)
+              audit[path.name] = {
+                  'rows': len(rows),
+                  'first_open_time': rows[0][0],
+                  'last_open_time': rows[-1][0],
+                  'columns_min': min(map(len, rows)),
+                  'columns_max': max(map(len, rows)),
+              }
+              if len(rows) < 10900:
+                  raise SystemExit(f'insufficient rows for {path}: {len(rows)}')
+          (root/'DATA_AUDIT.json').write_text(json.dumps(audit, indent=2))
+          print(json.dumps(audit, indent=2))
+          PY
+          sha256sum "$root"/*.csv > "$root/SHA256SUMS.txt"
+          rm -rf "$root/raw"
+      - name: Upload public multi-measure artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BTCUSDT_MULTI_MEASURE_4H_2020_2024_PUBLIC
+          path: artifacts/public_binance_multimeasure
+          if-no-files-found: error
+          retention-days: 7
