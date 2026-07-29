@@ -12,36 +12,27 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Probe representative daily archives and funding API
+      - name: Probe all late-2019 representative daily archives
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p out
-          date='2019-09-15'
           base='https://data.binance.vision/data/futures/um/daily'
-          urls=(
-            "$base/klines/BTCUSDT/4h/BTCUSDT-4h-${date}.zip"
-            "$base/markPriceKlines/BTCUSDT/4h/BTCUSDT-4h-${date}.zip"
-            "$base/indexPriceKlines/BTCUSDT/4h/BTCUSDT-4h-${date}.zip"
-            "$base/premiumIndexKlines/BTCUSDT/4h/BTCUSDT-4h-${date}.zip"
-          )
           : > out/archive_status.tsv
-          for url in "${urls[@]}"; do
-            code=$(curl -sS -L -o /tmp/probe.zip -w '%{http_code}' "$url" || true)
-            bytes=$(test -f /tmp/probe.zip && stat -c%s /tmp/probe.zip || echo 0)
-            printf '%s\t%s\t%s\n' "$code" "$bytes" "$url" | tee -a out/archive_status.tsv
-            if [ "$code" = 200 ]; then unzip -t /tmp/probe.zip; fi
+          for date in 2019-09-15 2019-10-15 2019-11-15 2019-12-15; do
+            for type in klines markPriceKlines indexPriceKlines premiumIndexKlines; do
+              url="$base/$type/BTCUSDT/4h/BTCUSDT-4h-${date}.zip"
+              code=$(curl -sS -L -o /tmp/probe.zip -w '%{http_code}' "$url" || true)
+              bytes=$(test -f /tmp/probe.zip && stat -c%s /tmp/probe.zip || echo 0)
+              printf '%s\t%s\t%s\t%s\n' "$date" "$type" "$code" "$bytes" | tee -a out/archive_status.tsv
+              if [ "$code" = 200 ]; then unzip -t /tmp/probe.zip; fi
+            done
           done
-          curl --fail --location --retry 3 'https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&startTime=1567296000000&endTime=1577836799999&limit=1000' -o out/funding_2019.json
-          python - <<'PY'
-          import json
-          p='out/funding_2019.json'
-          j=json.load(open(p))
-          print('funding_records',len(j))
-          print('first',j[0] if j else None)
-          print('last',j[-1] if j else None)
-          assert isinstance(j,list)
-          PY
+          funding_url='https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&startTime=1567296000000&endTime=1577836799999&limit=1000'
+          funding_code=$(curl -sS -L -o out/funding_2019_response.json -w '%{http_code}' "$funding_url" || true)
+          printf '%s\n' "$funding_code" > out/funding_http_status.txt
+          cat out/archive_status.tsv
+          echo "funding_http_status=$funding_code"
       - uses: actions/upload-artifact@v4
         with:
           name: r13-2019-common-corpus-probe
