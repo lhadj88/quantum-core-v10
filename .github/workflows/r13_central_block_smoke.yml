@@ -13,17 +13,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Download one official Binance archive
+      - name: Download representative official Binance archives
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p out
-          url='https://data.binance.vision/data/futures/um/monthly/klines/BTCUSDT/4h/BTCUSDT-4h-2025-12.zip'
-          curl --fail --location --retry 3 "$url" -o out/BTCUSDT-4h-2025-12.zip
-          unzip -t out/BTCUSDT-4h-2025-12.zip
-          sha256sum out/BTCUSDT-4h-2025-12.zip > out/SHA256SUMS.txt
+          mkdir -p out/raw out/preview
+          base='https://data.binance.vision/data'
+          urls=(
+            "$base/spot/monthly/klines/BTCUSDT/4h/BTCUSDT-4h-2025-12.zip"
+            "$base/futures/um/monthly/klines/BTCUSDT/4h/BTCUSDT-4h-2025-12.zip"
+            "$base/futures/um/monthly/markPriceKlines/BTCUSDT/4h/BTCUSDT-4h-2025-12.zip"
+            "$base/futures/um/monthly/indexPriceKlines/BTCUSDT/4h/BTCUSDT-4h-2025-12.zip"
+            "$base/futures/um/monthly/premiumIndexKlines/BTCUSDT/4h/BTCUSDT-4h-2025-12.zip"
+            "$base/futures/um/monthly/fundingRate/BTCUSDT/BTCUSDT-fundingRate-2025-12.zip"
+          )
+          i=0
+          for url in "${urls[@]}"; do
+            i=$((i+1)); f="out/raw/${i}_$(basename "$url")"
+            curl --fail --location --retry 3 "$url" -o "$f"
+            unzip -t "$f"
+            unzip -p "$f" | head -n 5 > "out/preview/${i}.txt" || true
+          done
+          sha256sum out/raw/* > out/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: r13-central-block-smoke
+          name: r13-central-block-schema-smoke
           path: out/
           retention-days: 1
