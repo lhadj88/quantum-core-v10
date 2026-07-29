@@ -1,4 +1,4 @@
-name: R13 central block smoke
+name: R13 spot perp central block
 
 on:
   pull_request:
@@ -9,34 +9,52 @@ permissions:
   contents: read
 
 jobs:
-  smoke:
+  run:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-      - name: Download representative official Binance archives
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install scientific stack
+        run: python -m pip install --disable-pip-version-check numpy pandas scipy scikit-learn requests
+      - name: Reconstruct and audit runner
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p out/raw out/preview
-          base='https://data.binance.vision/data'
-          urls=(
-            "$base/spot/monthly/klines/BTCUSDT/4h/BTCUSDT-4h-2025-12.zip"
-            "$base/futures/um/monthly/klines/BTCUSDT/4h/BTCUSDT-4h-2025-12.zip"
-            "$base/futures/um/monthly/markPriceKlines/BTCUSDT/4h/BTCUSDT-4h-2025-12.zip"
-            "$base/futures/um/monthly/indexPriceKlines/BTCUSDT/4h/BTCUSDT-4h-2025-12.zip"
-            "$base/futures/um/monthly/premiumIndexKlines/BTCUSDT/4h/BTCUSDT-4h-2025-12.zip"
-            "$base/futures/um/monthly/fundingRate/BTCUSDT/BTCUSDT-fundingRate-2025-12.zip"
-          )
-          i=0
-          for url in "${urls[@]}"; do
-            i=$((i+1)); f="out/raw/${i}_$(basename "$url")"
-            curl --fail --location --retry 3 "$url" -o "$f"
-            unzip -t "$f"
-            unzip -p "$f" | head -n 5 > "out/preview/${i}.txt" || true
-          done
-          sha256sum out/raw/* > out/SHA256SUMS.txt
+          cat r13_runner_parts/part_00.pyfrag r13_runner_parts/part_01.pyfrag r13_runner_parts/part_02.pyfrag r13_runner_parts/part_03.pyfrag > run_r13_spot_perp_central.py
+          python -m py_compile run_r13_spot_perp_central.py
+          sha256sum run_r13_spot_perp_central.py
+      - name: Execute frozen central block
+        env:
+          R13_WORK: ${{ github.workspace }}/r13_spot_perp_work
+        run: python run_r13_spot_perp_central.py
+      - name: Final governance audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f r13_spot_perp_work/R13_SPOT_PERP_CENTRAL_BLOCK_FIXED_v0_1.zip
+          unzip -t r13_spot_perp_work/R13_SPOT_PERP_CENTRAL_BLOCK_FIXED_v0_1.zip
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('r13_spot_perp_work/output/02_DATA_FEATURE_TARGET_INTEGRITY.json')
+          j=json.loads(p.read_text())
+          assert j['rows_2026_read']==0
+          assert '2026-' not in j['end']
+          assert '2026-' not in j['max_decision_time']
+          assert j['six_h4_clocks']==[0,4,8,12,16,20]
+          print(json.dumps(j, indent=2))
+          PY
+          cat r13_spot_perp_work/output/04_PRIMARY_WALK_FORWARD_SUMMARY.csv
+          cat r13_spot_perp_work/output/07_CENTRAL_GROUP_ADDITION_DIAGNOSTICS.csv
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: r13-central-block-schema-smoke
-          path: out/
-          retention-days: 1
+          name: r13-spot-perp-central-block
+          path: |
+            r13_spot_perp_work/output/
+            r13_spot_perp_work/R13_SPOT_PERP_CENTRAL_BLOCK_FIXED_v0_1.zip
+            r13_spot_perp_work/R13_SPOT_PERP_CENTRAL_BLOCK_FIXED_v0_1.zip.sha256
+          retention-days: 7
