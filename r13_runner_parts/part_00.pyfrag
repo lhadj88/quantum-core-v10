@@ -1,0 +1,188 @@
+from __future__ import annotations
+
+import hashlib
+import io
+import json
+import math
+import os
+import shutil
+import sys
+import time
+import warnings
+import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import requests
+from scipy import sparse
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import SGDClassifier
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, confusion_matrix, f1_score
+from sklearn.preprocessing import StandardScaler
+
+warnings.filterwarnings('ignore')
+SEED = 20260729
+np.random.seed(SEED)
+
+ROOT = Path(os.environ.get('R13_WORK', 'r13_spot_perp_work')).resolve()
+RAW = ROOT / 'raw'
+OUT = ROOT / 'output'
+RAW.mkdir(parents=True, exist_ok=True)
+OUT.mkdir(parents=True, exist_ok=True)
+
+BASE_URL = 'https://data.binance.vision/data'
+START_MONTH = pd.Period('2019-09', freq='M')
+END_MONTH = pd.Period('2025-12', freq='M')
+MONTHS = list(pd.period_range(START_MONTH, END_MONTH, freq='M'))
+HARD_CUTOFF = pd.Timestamp('2026-01-01', tz='UTC')
+ROUTES = ['FAST_REVERSION_H1', 'DELAYED_REVERSION_H2_H12', 'CONTINUATION_OR_OVERSHOOT', 'AMBIGUOUS_ABSTAIN']
+CAUSES = ['SURVIVE', 'REV', 'CONT', 'AMBIG']
+ALPHA = 0.001
+MARGIN = 0.15
+
+KLINE_COLS = ['open_time','open','high','low','close','volume','close_time','quote_volume','trades','taker_buy_base','taker_buy_quote','ignore']
+
+DATASETS = {
+    'spot': lambda ym: f'{BASE_URL}/spot/monthly/klines/BTCUSDT/4h/BTCUSDT-4h-{ym}.zip',
+    'perp': lambda ym: f'{BASE_URL}/futures/um/monthly/klines/BTCUSDT/4h/BTCUSDT-4h-{ym}.zip',
+    'mark': lambda ym: f'{BASE_URL}/futures/um/monthly/markPriceKlines/BTCUSDT/4h/BTCUSDT-4h-{ym}.zip',
+    'index': lambda ym: f'{BASE_URL}/futures/um/monthly/indexPriceKlines/BTCUSDT/4h/BTCUSDT-4h-{ym}.zip',
+    'premium': lambda ym: f'{BASE_URL}/futures/um/monthly/premiumIndexKlines/BTCUSDT/4h/BTCUSDT-4h-{ym}.zip',
+    'funding': lambda ym: f'{BASE_URL}/futures/um/monthly/fundingRate/BTCUSDT/BTCUSDT-fundingRate-{ym}.zip',
+}
+
+
+def sha256_bytes(b: bytes) -> str:
+    return hashlib.sha256(b).hexdigest()
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open('rb') as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def fetch_one(kind: str, period: pd.Period) -> dict:
+    ym = str(period)
+    url = DATASETS[kind](ym)
+    path = RAW / kind / Path(url).name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {'kind': kind, 'month': ym, 'url': url, 'path': str(path.relative_to(ROOT))}
+    if path.exists() and path.stat().st_size > 100:
+        content = path.read_bytes()
+        record.update(status='cached', bytes=len(content), sha256=sha256_bytes(content))
+        return record
+    session = requests.Session()
+    for attempt in range(5):
+        try:
+            r = session.get(url, timeout=60)
+            if r.status_code == 404:
+                record.update(status='missing_404', bytes=0)
+                return record
+            r.raise_for_status()
+            content = r.content
+            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                if not any(n.lower().endswith('.csv') for n in zf.namelist()):
+                    raise RuntimeError('ZIP contains no CSV')
+                bad = zf.testzip()
+                if bad:
+                    raise RuntimeError(f'ZIP CRC failure: {bad}')
+            path.write_bytes(content)
+            record.update(status='downloaded', bytes=len(content), sha256=sha256_bytes(content))
+            # Binance publishes a sibling checksum. Record and verify whenever available.
+            cr = session.get(url + '.CHECKSUM', timeout=30)
+            if cr.status_code == 200:
+                token = cr.text.strip().split()[0].lower()
+                record['published_checksum'] = token
+                record['checksum_verified'] = token == record['sha256']
+                if not record['checksum_verified']:
+                    raise RuntimeError('Published checksum mismatch')
+            else:
+                record['published_checksum'] = None
+                record['checksum_verified'] = None
+            return record
+        except Exception as exc:
+            if attempt == 4:
+                record.update(status='error', error=repr(exc))
+                return record
+            time.sleep(2 ** attempt)
+    return record
+
+
+def acquire() -> pd.DataFrame:
+    tasks = [(k, m) for k in DATASETS for m in MONTHS]
+    rows = []
+    with ThreadPoolExecutor(max_workers=12) as ex:
+        futs = {ex.submit(fetch_one, k, m): (k, m) for k, m in tasks}
+        for i, fut in enumerate(as_completed(futs), 1):
+            rec = fut.result(); rows.append(rec)
+            if i % 50 == 0:
+                print(f'acquisition {i}/{len(tasks)}', flush=True)
+    manifest = pd.DataFrame(rows).sort_values(['kind', 'month'])
+    manifest.to_csv(OUT / '01_ARCHIVE_MANIFEST.csv', index=False)
+    errors = manifest[manifest.status == 'error']
+    if len(errors):
+        raise RuntimeError(f'Archive acquisition errors: {errors[["kind","month","error"]].to_dict("records")[:5]}')
+    # All six streams must cover every month from 2020-01 onward. 2019 availability can begin later.
+    required = manifest[manifest.month >= '2020-01']
+    missing = required[~required.status.isin(['downloaded', 'cached'])]
+    if len(missing):
+        raise RuntimeError(f'Missing required archives: {missing[["kind","month","status"]].to_dict("records")[:20]}')
+    return manifest
+
+
+def read_zip_csv(path: Path, names: list[str] | None = None) -> pd.DataFrame:
+    with zipfile.ZipFile(path) as zf:
+        files = [n for n in zf.namelist() if n.lower().endswith('.csv')]
+        if len(files) != 1:
+            raise RuntimeError(f'Unexpected ZIP contents {path}: {files}')
+        raw = zf.read(files[0])
+    first = raw.splitlines()[0].decode('utf-8', errors='replace').lower()
+    has_header = any(x in first for x in ('open_time', 'calc_time'))
+    return pd.read_csv(io.BytesIO(raw), header=0 if has_header else None, names=None if has_header else names)
+
+
+def normalize_timestamp(series: pd.Series) -> pd.Series:
+    x = pd.to_numeric(series, errors='coerce').astype('Int64')
+    arr = x.fillna(0).to_numpy(dtype=np.int64)
+    arr = np.where(arr > 10**14, arr // 1000, arr)
+    return pd.to_datetime(arr, unit='ms', utc=True, errors='coerce')
+
+
+def load_kline_kind(kind: str) -> pd.DataFrame:
+    frames = []
+    for p in sorted((RAW / kind).glob('*.zip')):
+        df = read_zip_csv(p, KLINE_COLS)
+        # Normalize headers from futures archives.
+        ren = {'count':'trades','taker_buy_volume':'taker_buy_base','taker_buy_quote_volume':'taker_buy_quote'}
+        df = df.rename(columns=ren)
+        if 'open_time' not in df:
+            df.columns = KLINE_COLS[:len(df.columns)]
+        df['timestamp'] = normalize_timestamp(df['open_time'])
+        for c in ['open','high','low','close','volume','quote_volume','trades','taker_buy_base','taker_buy_quote']:
+            if c not in df: df[c] = np.nan
+            df[c] = pd.to_numeric(df[c], errors='coerce')
+        frames.append(df[['timestamp','open','high','low','close','volume','quote_volume','trades','taker_buy_base','taker_buy_quote']])
+    out = pd.concat(frames, ignore_index=True).dropna(subset=['timestamp']).drop_duplicates('timestamp', keep='last').sort_values('timestamp')
+    out = out[out.timestamp < HARD_CUTOFF].reset_index(drop=True)
+    return out
+
+
+def load_funding() -> pd.DataFrame:
+    frames = []
+    for p in sorted((RAW / 'funding').glob('*.zip')):
+        df = read_zip_csv(p, ['calc_time','funding_interval_hours','last_funding_rate'])
+        if 'calc_time' not in df:
+            df.columns = ['calc_time','funding_interval_hours','last_funding_rate'][:len(df.columns)]
+        df['calc_time'] = normalize_timestamp(df['calc_time'])
+        df['funding_rate'] = pd.to_numeric(df['last_funding_rate'], errors='coerce')
+        df['funding_interval_hours'] = pd.to_numeric(df.get('funding_interval_hours', 8), errors='coerce')
+        frames.append(df[['calc_time','funding_interval_hours','funding_rate']])
+    out = pd.concat(frames, ignore_index=True).dropna(subset=['calc_time']).drop_duplicates('calc_time', keep='last').sort_values('calc_time')
+    out = out[out.calc_time < HARD_CUTOFF].reset_index(drop=True)
+    for w in [3,9,21]:
