@@ -1,0 +1,70 @@
+name: Export Public Binance BTCUSDT UM 4H 2025
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download and consolidate public monthly archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="artifacts/public_binance_2025"
+          mkdir -p "$root/monthly"
+          output="$root/BTCUSDT_UM_PERP_4h_2025.csv"
+          : > "$output"
+          for month in $(seq -w 1 12); do
+            zip="BTCUSDT-4h-2025-${month}.zip"
+            url="https://data.binance.vision/data/futures/um/monthly/klines/BTCUSDT/4h/${zip}"
+            curl --fail --location --retry 5 --retry-delay 2 --output "$root/monthly/${zip}" "$url"
+            unzip -p "$root/monthly/${zip}" "*.csv" >> "$output"
+          done
+          python - <<'PY'
+          import csv, json
+          from pathlib import Path
+          root = Path('artifacts/public_binance_2025')
+          path = root / 'BTCUSDT_UM_PERP_4h_2025.csv'
+          rows = []
+          with path.open(newline='', encoding='utf-8') as handle:
+              for row in csv.reader(handle):
+                  if not row:
+                      continue
+                  try:
+                      int(float(row[0]))
+                  except ValueError:
+                      continue
+                  rows.append(row[:12])
+          dedup = {int(float(row[0])): row for row in rows}
+          rows = [dedup[key] for key in sorted(dedup)]
+          with path.open('w', newline='', encoding='utf-8') as handle:
+              csv.writer(handle).writerows(rows)
+          if len(rows) not in range(2185, 2195):
+              raise SystemExit(f'unexpected row count: {len(rows)}')
+          audit = {
+              'rows': len(rows),
+              'first_open_time': rows[0][0],
+              'last_open_time': rows[-1][0],
+              'columns_min': min(map(len, rows)),
+              'columns_max': max(map(len, rows)),
+          }
+          (root/'DATA_AUDIT.json').write_text(json.dumps(audit, indent=2))
+          print(audit)
+          PY
+          sha256sum "$output" > "$root/SHA256SUMS.txt"
+          rm -rf "$root/monthly"
+      - name: Upload public data artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BTCUSDT_UM_PERP_4H_2025_PUBLIC
+          path: artifacts/public_binance_2025
+          if-no-files-found: error
+          retention-days: 7
