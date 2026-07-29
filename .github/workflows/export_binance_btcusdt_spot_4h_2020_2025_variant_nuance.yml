@@ -1,0 +1,65 @@
+name: Export Public Binance BTCUSDT Spot 4H 2020-2025 Variant Nuance
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download and consolidate public spot archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/public_binance_spot_2020_2025/monthly
+          output="artifacts/public_binance_spot_2020_2025/BTCUSDT_SPOT_4h_2020_2025.csv"
+          : > "$output"
+          for year in $(seq 2020 2025); do
+            for month in $(seq -w 1 12); do
+              zip="BTCUSDT-4h-${year}-${month}.zip"
+              url="https://data.binance.vision/data/spot/monthly/klines/BTCUSDT/4h/${zip}"
+              curl --fail --location --retry 5 --retry-delay 2 --output "artifacts/public_binance_spot_2020_2025/monthly/${zip}" "$url"
+              unzip -p "artifacts/public_binance_spot_2020_2025/monthly/${zip}" "*.csv" >> "$output"
+            done
+          done
+          python - <<'PY'
+          import csv
+          from pathlib import Path
+          p = Path('artifacts/public_binance_spot_2020_2025/BTCUSDT_SPOT_4h_2020_2025.csv')
+          rows = []
+          with p.open(newline='', encoding='utf-8') as f:
+              for row in csv.reader(f):
+                  if not row:
+                      continue
+                  try:
+                      int(float(row[0]))
+                  except ValueError:
+                      continue
+                  rows.append(row[:12])
+          rows.sort(key=lambda r: int(float(r[0])))
+          dedup = {}
+          for row in rows:
+              dedup[int(float(row[0]))] = row
+          rows = [dedup[key] for key in sorted(dedup)]
+          with p.open('w', newline='', encoding='utf-8') as f:
+              csv.writer(f).writerows(rows)
+          if len(rows) not in range(13140, 13161):
+              raise SystemExit(f'unexpected row count: {len(rows)}')
+          print({'rows': len(rows), 'first': rows[0][0], 'last': rows[-1][0]})
+          PY
+          sha256sum "$output" > artifacts/public_binance_spot_2020_2025/SHA256SUMS.txt
+          rm -rf artifacts/public_binance_spot_2020_2025/monthly
+      - name: Upload public spot artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BTCUSDT_SPOT_4H_2020_2025_PUBLIC
+          path: artifacts/public_binance_spot_2020_2025
+          if-no-files-found: error
+          retention-days: 7
