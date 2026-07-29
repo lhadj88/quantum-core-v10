@@ -1,0 +1,132 @@
+    d['avg_trade_log_ratio']=np.log((d.perp_avg_trade+1e-12)/(d.spot_avg_trade+1e-12))
+    d['perp_range_log']=np.log(d.perp_high/d.perp_low)
+    d['perp_impact']=pret.abs()/(d.perp_quote_volume+1e-12)*1e9
+    d['impact_gap']=d.perp_impact-d.spot_impact; d['range_gap']=d.perp_range_log-d.spot_range_log
+    for c in ['qvol_log_ratio','trades_log_ratio','avg_trade_log_ratio','impact_gap','range_gap']:
+        d[f'{c}_z24']=rolling_z(d[c],24); d[f'{c}_z72']=rolling_z(d[c],72)
+    groups['activity_liquidity']=['perp_log_qvol','perp_log_trades','perp_avg_trade','qvol_log_ratio','trades_log_ratio','avg_trade_log_ratio','perp_range_log','perp_impact','impact_gap','range_gap']+[f'{c}_z{w}' for c in ['qvol_log_ratio','trades_log_ratio','avg_trade_log_ratio','impact_gap','range_gap'] for w in [24,72]]
+
+    # Corrected competing-risk target, unchanged from the prior corrected branch.
+    d['target_barrier']=np.maximum(d.abs_r1,d.pre_vol24)
+    n=len(d); s=pol.to_numpy(float); c=d.spot_close.to_numpy(float); hi=d.spot_high.to_numpy(float); lo=d.spot_low.to_numpy(float); b=d.target_barrier.to_numpy(float)
+    cause=np.full(n,None,object); event_h=np.full(n,np.nan); tie=np.zeros(n,bool); gap_safe=np.zeros(n,bool)
+    ts=d.timestamp
+    for i in range(n-12):
+        if not(np.isfinite(s[i]) and np.isfinite(b[i]) and b[i]>0): continue
+        if ts.iloc[i+12]-ts.iloc[i] != pd.Timedelta(hours=48): continue
+        gap_safe[i]=True; rp=c[i]*np.exp(-s[i]*b[i]); cp=c[i]*np.exp(s[i]*b[i]); got=False
+        for h in range(1,13):
+            if s[i]>0: rh=lo[i+h]<=rp; ch=hi[i+h]>=cp
+            else: rh=hi[i+h]>=rp; ch=lo[i+h]<=cp
+            if rh and ch: cause[i]='AMBIG'; event_h[i]=h; tie[i]=True; got=True; break
+            if rh: cause[i]='REV'; event_h[i]=h; got=True; break
+            if ch: cause[i]='CONT'; event_h[i]=h; got=True; break
+        if not got: cause[i]='NONE'; event_h[i]=13
+    d['cause']=cause; d['event_h']=event_h; d['same_bar_tie']=tie; d['gap_safe_target']=gap_safe
+    route=np.full(n,None,object)
+    route[(cause=='REV')&(event_h==1)]=ROUTES[0]; route[(cause=='REV')&(event_h>=2)]=ROUTES[1]
+    route[cause=='CONT']=ROUTES[2]; route[np.isin(cause,['AMBIG','NONE'])]=ROUTES[3]
+    d['true_route']=route
+
+    feature_sets={'SPOT_ONLY_FIXED':list(dict.fromkeys(spot_features))}
+    for g, cols in groups.items(): feature_sets[f'SPOT_PLUS_{g.upper()}']=list(dict.fromkeys(spot_features+cols))
+    feature_sets['SPOT_PERP_FULL_CENTRAL']=list(dict.fromkeys(spot_features+sum(groups.values(),[])))
+
+    all_features=list(dict.fromkeys(sum(feature_sets.values(),[])))
+    d[all_features]=d[all_features].replace([np.inf,-np.inf],np.nan)
+    data=d[(d.timestamp>=pd.Timestamp('2019-09-01',tz='UTC')) & d.gap_safe_target & d.true_route.notna()].copy()
+    integrity={
+        'joined_rows':int(len(d)), 'analysis_rows':int(len(data)), 'start':str(d.timestamp.min()), 'end':str(d.timestamp.max()),
+        'max_decision_time':str(d.decision_time.max()), 'rows_2026_read':0,
+        'target_distribution':data.true_route.value_counts().to_dict(), 'same_bar_ties':int(data.same_bar_tie.sum()),
+        'no_cross_by_h12':int((data.cause=='NONE').sum()), 'alpha_fixed':ALPHA, 'margin_fixed':MARGIN,
+        'six_h4_clocks':sorted(int(x) for x in data.timestamp.dt.hour.unique()),
+        'feature_counts':{k:len(v) for k,v in feature_sets.items()},
+        'source_rows':{'spot':len(spot),'perp':len(perp),'mark':len(mark),'index':len(index),'premium':len(premium),'funding':len(funding)},
+    }
+    return data, feature_sets, integrity
+
+
+@dataclass
+class Prep:
+    features:list[str]; imp:SimpleImputer; sc:StandardScaler
+    @classmethod
+    def fit(cls,frame,features):
+        imp=SimpleImputer(strategy='median'); x=imp.fit_transform(frame[features]); sc=StandardScaler(); sc.fit(x); return cls(features,imp,sc)
+    def transform(self,frame): return self.sc.transform(self.imp.transform(frame[self.features])).astype(np.float32)
+
+
+def hazard_design(X,horizons):
+    hn=(horizons.astype(np.float32)-1)/11.0
+    h_one=sparse.csr_matrix((np.ones(len(horizons),np.float32),(np.arange(len(horizons)),horizons-1)),shape=(len(horizons),12))
+    poly=sparse.csr_matrix(np.column_stack([hn,hn**2,np.log1p(horizons)/np.log(13)]).astype(np.float32))
+    return sparse.hstack([sparse.csr_matrix(X),sparse.csr_matrix(X*hn[:,None]),h_one,poly],format='csr')
+
+
+def stack_rows(frame,X):
+    times=frame.event_h.to_numpy(int); reps=np.minimum(times,12)
+    idx=np.repeat(np.arange(len(frame)),reps); horizons=np.concatenate([np.arange(1,r+1) for r in reps])
+    y=np.full(len(idx),'SURVIVE',object); ends=np.cumsum(reps)-1; occurred=times<=12; y[ends[occurred]]=frame.cause.to_numpy(object)[occurred]
+    return hazard_design(X[idx],horizons),y
+
+
+@dataclass
+class RiskModel:
+    features:list[str]; prep:Prep|None=None; model:object|None=None
+    def fit(self,frame):
+        self.prep=Prep.fit(frame,self.features); X=self.prep.transform(frame); Z,y=stack_rows(frame,X)
+        self.model=SGDClassifier(loss='log_loss',alpha=ALPHA,penalty='l2',max_iter=250,tol=1e-3,average=True,random_state=SEED,n_jobs=-1)
+        self.model.fit(Z,y); return self
+    def distribution(self,frame):
+        X=self.prep.transform(frame); n=len(frame); surv=np.ones(n); route=np.zeros((n,4)); rev=np.zeros((n,12)); cont=np.zeros((n,12)); amb=np.zeros((n,12)); classes=list(self.model.classes_)
+        for h in range(1,13):
+            raw=self.model.predict_proba(hazard_design(X,np.full(n,h,int))); probs=np.zeros((n,4))
+            for j,c in enumerate(classes): probs[:,CAUSES.index(c)]=raw[:,j]
+            probs=probs/(probs.sum(1,keepdims=True)+1e-15); prev=surv.copy()
+            cr=prev*probs[:,1]; cc=prev*probs[:,2]; ca=prev*probs[:,3]
+            rev[:,h-1]=cr; cont[:,h-1]=cc; amb[:,h-1]=ca
+            route[:,0 if h==1 else 1]+=cr; route[:,2]+=cc; route[:,3]+=ca; surv=prev*probs[:,0]
+        route[:,3]+=surv; route=route/(route.sum(1,keepdims=True)+1e-15)
+        return route,rev,cont,amb
+
+
+def decisions(probs):
+    order=np.argsort(probs,axis=1); top=order[:,-1]; second=order[:,-2]; margin=probs[np.arange(len(probs)),top]-probs[np.arange(len(probs)),second]
+    raw=np.array(ROUTES,object)[top]; action=(raw!=ROUTES[3])&(margin>=MARGIN); dec=raw.copy(); dec[~action]=ROUTES[3]
+    return raw,dec,action,margin
+
+
+def evaluate(frame,probs):
+    y=frame.true_route.to_numpy(object); raw,dec,act,margin=decisions(probs)
+    return {
+        'n':len(y),'raw_route_accuracy':float(np.mean(raw==y)),'balanced_accuracy':float(balanced_accuracy_score(y,raw)),
+        'macro_f1':float(f1_score(y,raw,labels=ROUTES,average='macro',zero_division=0)),
+        'coverage':float(act.mean()),'n_actions':int(act.sum()),'actionable_accuracy':float(np.mean(dec[act]==y[act])) if act.any() else None,
+        'ambiguous_true_rate':float(np.mean(y==ROUTES[3])),'ambiguous_decision_rate':float(np.mean(dec==ROUTES[3])),
+        'confusion':confusion_matrix(y,raw,labels=ROUTES).tolist(),
+    }, pd.DataFrame({'timestamp':frame.timestamp.to_numpy(),'true_route':y,'raw_prediction':raw,'decision':dec,'actionable':act,'margin':margin,**{f'prob_{r}':probs[:,i] for i,r in enumerate(ROUTES)}})
+
+
+def block_bootstrap_delta(y,a,b,block=42,B=2000):
+    d=(a==y).astype(float)-(b==y).astype(float); obs=float(d.mean()); n=len(d); rng=np.random.default_rng(SEED); vals=[]
+    nb=math.ceil(n/block)
+    for _ in range(B):
+        starts=rng.integers(0,max(1,n-block+1),nb); idx=np.concatenate([np.arange(s,min(s+block,n)) for s in starts])[:n]; vals.append(d[idx].mean())
+    vals=np.asarray(vals); centered=vals-obs; p=float((1+np.sum(centered>=obs))/(B+1))
+    return {'delta':obs,'block_bars':block,'iterations':B,'p_one_sided_centered':p,'ci95':[float(np.quantile(vals,.025)),float(np.quantile(vals,.975))]}
+
+
+def fit_predict(train,test,features):
+    model=RiskModel(features).fit(train); probs,*_=model.distribution(test); return probs
+
+
+def main():
+    manifest=acquire()
+    data,feature_sets,integrity=build_dataset()
+    (OUT/'02_DATA_FEATURE_TARGET_INTEGRITY.json').write_text(json.dumps(integrity,indent=2,default=str))
+    pd.DataFrame([{'model':k,'feature':f} for k,v in feature_sets.items() for f in v]).to_csv(OUT/'03_FEATURE_REGISTER.csv',index=False)
+
+    primary_models=['SPOT_ONLY_FIXED','SPOT_PERP_FULL_CENTRAL']
+    annual=[]; pred_all=[]; paired={}
+    for year in [2023,2024,2025]:
+        start=pd.Timestamp(f'{year}-01-01',tz='UTC'); end=pd.Timestamp(f'{year+1}-01-01',tz='UTC')
