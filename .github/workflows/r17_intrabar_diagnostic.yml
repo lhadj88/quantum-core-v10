@@ -35,7 +35,7 @@ jobs:
       - name: Install dependencies
         run: python -m pip install --upgrade pip && pip install -r research/r17_intrabar_diagnostic/requirements.txt
       - name: Execute R17 diagnostic
-        run: python research/r17_intrabar_diagnostic/run_r17_intrabar_v2.py
+        run: python research/r17_intrabar_diagnostic/run_r17_intrabar_v3.py
       - name: Package evidence
         if: always()
         run: |
