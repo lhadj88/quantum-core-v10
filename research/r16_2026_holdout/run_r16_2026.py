@@ -22,8 +22,8 @@ CUTOFF = pd.Timestamp("2026-07-30T00:00:00Z")
 SHOCK_THRESHOLD = 0.49053003411162827
 GAP_THRESHOLD = -0.0031137634157309413
 EXPECTED_2025_PHYSICAL = 51
-EXPECTED_2025_ACTIONED = 10
-EXPECTED_2025_SUCCESS = 8
+EXPECTED_2025_ACTIONED = 25
+EXPECTED_2025_SUCCESS = 20
 COLS = ["open_time", "open", "high", "low", "close", "volume", "close_time", "quote_volume", "trades", "taker_buy_base", "taker_buy_quote", "ignore"]
 
 
@@ -90,9 +90,14 @@ def load_venue(venue: str) -> tuple[pd.DataFrame, list[dict]]:
     df["trades"] = pd.to_numeric(df["trades"], errors="raise").astype("int64")
     open_raw = pd.to_numeric(df["open_time"], errors="raise")
     close_raw = pd.to_numeric(df["close_time"], errors="raise")
-    unit = "us" if float(open_raw.median()) > 1e14 else "ms"
-    df["open_time"] = pd.to_datetime(open_raw, unit=unit, utc=True)
-    df["close_time"] = pd.to_datetime(close_raw, unit=unit, utc=True)
+    def mixed_datetime(values: pd.Series) -> pd.Series:
+        mask_ms = values < 1e14
+        result = pd.Series(pd.NaT, index=values.index, dtype="datetime64[ns, UTC]")
+        result.loc[mask_ms] = pd.to_datetime(values.loc[mask_ms], unit="ms", utc=True)
+        result.loc[~mask_ms] = pd.to_datetime(values.loc[~mask_ms], unit="us", utc=True)
+        return result
+    df["open_time"] = mixed_datetime(open_raw)
+    df["close_time"] = mixed_datetime(close_raw)
     df = df.sort_values("open_time").drop_duplicates("open_time").reset_index(drop=True)
     df = df[(df["open_time"] >= FETCH_START) & (df["close_time"] < CUTOFF)].copy()
     expected_gap = df["open_time"].diff().dropna().eq(pd.Timedelta(hours=4))
