@@ -1,0 +1,62 @@
+name: R14 Public Compute Tribunal
+
+on:
+  push:
+    branches:
+      - agent/r14-public-compute
+    paths:
+      - 'research/r14_public_compute/**'
+      - '.github/workflows/r14_public_compute.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'research/r14_public_compute/**'
+      - '.github/workflows/r14_public_compute.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONHASHSEED: '20260730'
+
+jobs:
+  tribunal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: research/r14_public_compute/requirements.txt
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r research/r14_public_compute/requirements.txt
+      - name: Restore sealed program and exposed event base
+        run: |
+          cat research/r14_public_compute/program.part01 research/r14_public_compute/program.part02 research/r14_public_compute/program.part03 | base64 -d | gzip -d > research/r14_public_compute/run_r14_dynamic_transition.py
+          cat research/r14_public_compute/events.part01 research/r14_public_compute/events.part02 research/r14_public_compute/events.part03 research/r14_public_compute/events.part04 research/r14_public_compute/events.part05 | base64 -d | gzip -d > research/r14_public_compute/r11_selected_events.csv
+          sha256sum research/r14_public_compute/run_r14_dynamic_transition.py research/r14_public_compute/r11_selected_events.csv
+      - name: Execute R14 tribunal with hard pre-2026 cutoff
+        run: |
+          python research/r14_public_compute/run_r14_dynamic_transition.py \
+            --r11-events research/r14_public_compute/r11_selected_events.csv \
+            --output artifacts/r14_dynamic_transition_v0_2
+      - name: Package evidence
+        if: always()
+        run: |
+          if [ -d artifacts/r14_dynamic_transition_v0_2 ]; then
+            tar -czf R14_DYNAMIC_TRANSITION_TRIBUNAL_v0_2.tar.gz artifacts/r14_dynamic_transition_v0_2
+          fi
+      - name: Upload evidence artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: R14_DYNAMIC_TRANSITION_TRIBUNAL_v0_2
+          path: |
+            artifacts/r14_dynamic_transition_v0_2
+            R14_DYNAMIC_TRANSITION_TRIBUNAL_v0_2.tar.gz
+          if-no-files-found: error
+          retention-days: 30
