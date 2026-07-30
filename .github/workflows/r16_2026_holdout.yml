@@ -7,6 +7,12 @@ on:
     paths:
       - 'research/r16_2026_holdout/**'
       - '.github/workflows/r16_2026_holdout.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'research/r16_2026_holdout/**'
+      - '.github/workflows/r16_2026_holdout.yml'
   workflow_dispatch:
 
 permissions:
