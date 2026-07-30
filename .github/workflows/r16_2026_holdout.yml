@@ -39,16 +39,16 @@ jobs:
       - name: Package evidence
         if: always()
         run: |
-          if [ -d artifacts/r16_2026_holdout_v0_1 ]; then
-            tar -czf R16_2026_BLIND_HOLDOUT_v0_1.tar.gz artifacts/r16_2026_holdout_v0_1
+          if [ -d artifacts/r16_2026_holdout_v0_2 ]; then
+            tar -czf R16_2026_BLIND_HOLDOUT_v0_2.tar.gz artifacts/r16_2026_holdout_v0_2
           fi
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: R16_2026_BLIND_HOLDOUT_v0_1
+          name: R16_2026_BLIND_HOLDOUT_v0_2
           path: |
-            artifacts/r16_2026_holdout_v0_1
-            R16_2026_BLIND_HOLDOUT_v0_1.tar.gz
+            artifacts/r16_2026_holdout_v0_2
+            R16_2026_BLIND_HOLDOUT_v0_2.tar.gz
           if-no-files-found: error
           retention-days: 30
