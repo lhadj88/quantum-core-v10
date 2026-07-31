@@ -1,0 +1,84 @@
+            ll += beta*x[ev].sum()-d*np.log(sw); score += x[ev].sum()-d*mx; info += d*vx
+    return ll,score,info
+
+def cox_fit(df,timecol='fp_0.25_time_min',eventcol='fp_0.25_event'):
+    if df[eventcol].sum()==0 or df.P2_score.nunique()<2: return np.nan,np.nan,np.nan
+    beta=0.0
+    for _ in range(60):
+        ll,u,info=cox_components(df,beta,timecol=timecol,eventcol=eventcol)
+        if not np.isfinite(info) or info<=1e-12: return np.nan,np.nan,np.nan
+        step=np.clip(u/info,-2,2); beta+=step
+        if abs(step)<1e-10: break
+    ll,u,info=cox_components(df,beta,timecol=timecol,eventcol=eventcol)
+    return float(beta),float(math.exp(np.clip(beta,-50,50))),float(info)
+
+def cox_score_z(df,x,timecol,eventcol):
+    tmp=df.copy(); tmp['P2_score']=x
+    _,u,info=cox_components(tmp,0.0,timecol=timecol,eventcol=eventcol)
+    return float(u/math.sqrt(info)) if info>0 else np.nan
+
+def run_tests(df,outdir):
+    rng=np.random.default_rng(SEED)
+    # T1
+    rho=spearman(df.P2_score,df.T1_max_counter_60m)
+    yr1=[]
+    for y,g in df.groupby('year'):
+        r=spearman(g.P2_score,g.T1_max_counter_60m); yr1.append({'test':'T1','year':int(y),'estimate':r,'direction_pass':bool(np.isfinite(r) and r<0),'n':len(g)})
+    perm=np.empty(N_PERM)
+    y=df.T1_max_counter_60m.to_numpy(float)
+    for i in range(N_PERM): perm[i]=spearman(permute_within_year(df,rng),y)
+    p1=(1+np.sum(perm<=rho))/(N_PERM+1)
+    boots=[]
+    for _ in range(N_BOOT):
+        b=bootstrap_indices(df,rng); r=spearman(b.P2_score,b.T1_max_counter_60m)
+        if np.isfinite(r): boots.append(r)
+    ci1=np.quantile(boots,[.025,.975])
+    t1_years=sum(r['direction_pass'] for r in yr1)
+    # T2
+    beta,hr,info=cox_fit(df)
+    yr2=[]
+    for y,g in df.groupby('year'):
+        b,h,_=cox_fit(g); yr2.append({'test':'T2','year':int(y),'estimate':h,'beta':b,'direction_pass':bool(np.isfinite(h) and h<1),'n':len(g),'events':int(g['fp_0.25_event'].sum())})
+    zobs=cox_score_z(df,df.P2_score.to_numpy(float),'fp_0.25_time_min','fp_0.25_event')
+    zperm=np.empty(N_PERM)
+    for i in range(N_PERM): zperm[i]=cox_score_z(df,permute_within_year(df,rng),'fp_0.25_time_min','fp_0.25_event')
+    p2=(1+np.sum(zperm<=zobs))/(N_PERM+1)
+    bhr=[]
+    for _ in range(N_BOOT):
+        b=bootstrap_indices(df,rng); _,h,_=cox_fit(b)
+        if np.isfinite(h): bhr.append(h)
+    ci2=np.quantile(bhr,[.025,.975])
+    t2_years=sum(r['direction_pass'] for r in yr2)
+    adj=holm([p1,p2])
+    t1_gate=bool(t1_years>=4 and ci1[1]<0 and adj[0]<.05)
+    t2_gate=bool(t2_years>=4 and ci2[1]<1 and adj[1]<.05)
+    primary=pd.DataFrame([
+        {'test':'T1','estimate':rho,'metric':'Spearman_rho','ci_low':ci1[0],'ci_high':ci1[1],'p_one_sided':p1,'p_holm':adj[0],'years_direction_pass':t1_years,'gate_pass':t1_gate},
+        {'test':'T2','estimate':hr,'metric':'hazard_ratio','beta':beta,'score_z':zobs,'ci_low':ci2[0],'ci_high':ci2[1],'p_one_sided':p2,'p_holm':adj[1],'years_direction_pass':t2_years,'gate_pass':t2_gate},
+    ])
+    primary.to_csv(outdir/'03_PRIMARY_TESTS.csv',index=False,float_format='%.12g')
+    pd.DataFrame(yr1+yr2).to_csv(outdir/'04_YEARLY_PRIMARY_TESTS.csv',index=False,float_format='%.12g')
+    # Secondary fixed barriers, separate Holm family
+    sec=[]
+    for barrier in [0.10,0.50,1.00]:
+        tc=f'fp_{barrier:.2f}_time_min'; ec=f'fp_{barrier:.2f}_event'
+        b,h,_=cox_fit(df,timecol=tc,eventcol=ec); z=cox_score_z(df,df.P2_score.to_numpy(float),tc,ec)
+        zp=np.empty(N_PERM)
+        for i in range(N_PERM): zp[i]=cox_score_z(df,permute_within_year(df,rng),tc,ec)
+        p=(1+np.sum(zp<=z))/(N_PERM+1)
+        sec.append({'barrier':barrier,'beta':b,'hazard_ratio':h,'score_z':z,'p_one_sided':p,'events':int(df[ec].sum())})
+    sadj=holm([r['p_one_sided'] for r in sec])
+    for r,a in zip(sec,sadj): r['p_holm_secondary']=a
+    pd.DataFrame(sec).to_csv(outdir/'05_SECONDARY_BARRIER_TESTS.csv',index=False,float_format='%.12g')
+    # Descriptive secondary associations
+    assoc=[]
+    metrics=['max_counter_h1','max_counter_h3','max_counter_h6','max_counter_h12','max_aligned_h1','max_aligned_h3','max_aligned_h6','max_aligned_h12','time_max_counter_min','sign_change_count','auc_counter_fraction_hours']
+    for m in metrics: assoc.append({'metric':m,'spearman_rho':spearman(df.P2_score,df[m]),'n':len(df)})
+    pd.DataFrame(assoc).to_csv(outdir/'06_SECONDARY_ASSOCIATIONS.csv',index=False,float_format='%.12g')
+    if t1_gate and t2_gate: verdict='P2_TEMPORAL_TRANSITION_STATE_SUPPORTED_FOR_FUTURE_MULTIPROCESS_INTEGRATION'
+    elif t1_gate or t2_gate: verdict='P2_PARTIAL_TEMPORAL_MECHANISM_NO_PREDICTIVE_INTEGRATION'
+    else: verdict='P2_ROUTE_ASSOCIATION_ONLY_MECHANISM_FORMULATION_CLOSED'
+    result={'protocol_id':'R23A2_P2_TEMPORAL_BUDGET_VALIDATION_v0_1','execution_amendment':'R23A2_EXECUTION_AMENDMENT_v0_1','seed':SEED,'n_permutations':N_PERM,'n_bootstraps':N_BOOT,'events':len(df),'T1_gate':t1_gate,'T2_gate':t2_gate,'verdict':verdict,'R23B_authorized':False,'multiprocess_guardrail':'P2 is one mechanism/state only; no universal route or global classifier is promoted.'}
+    (outdir/'07_RESULT.json').write_text(json.dumps(result,indent=2)+'\n')
+    return primary,verdict,result
+
