@@ -1,0 +1,9 @@
+{
+  "audit_id": "R23A2_CONTINUITY_AUDIT_v0_1",
+  "state": "STARTED",
+  "issue_number": "24",
+  "workflow_run_id": "30673088061",
+  "started_at_utc": "2026-07-31T23:30:56.438673+00:00",
+  "statistics_executed": false,
+  "multiprocess_guardrail": "Availability audit only; no process is validated or falsified."
+}
