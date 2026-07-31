@@ -25,4 +25,8 @@ new = '''    evaluation_start = frozen["timestamp"].min()
 if old not in source:
     raise RuntimeError("R22 alignment patch target was not found")
 patched = source.replace(old, new, 1)
-exec(compile(patched, str(source_path), "exec"), {"__name__": "__main__"})
+namespace = {
+    "__name__": "__main__",
+    "__file__": str(source_path),
+}
+exec(compile(patched, str(source_path), "exec"), namespace, namespace)
