@@ -1,0 +1,13 @@
+Traceback (most recent call last):
+  File "/home/runner/work/quantum-core-v10/quantum-core-v10/r23a2/run_r23a2.py", line 268, in <module>
+    if __name__=='__main__': main()
+                             ^^^^^^
+  File "/home/runner/work/quantum-core-v10/quantum-core-v10/r23a2/run_r23a2.py", line 237, in main
+    records.append(path_metrics(r,path))
+                   ^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/work/quantum-core-v10/quantum-core-v10/r23a2/run_r23a2.py", line 89, in path_metrics
+    out['auc_counter_fraction_hours']=float(np.trapz(counter_close,dx=5/60))
+                                            ^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/numpy/__init__.py", line 769, in __getattr__
+    raise AttributeError(f"module {__name__!r} has no attribute {attr!r}")
+AttributeError: module 'numpy' has no attribute 'trapz'. Did you mean: 'trace'?
