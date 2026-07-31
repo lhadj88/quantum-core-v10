@@ -1,8 +1,13 @@
 {
   "protocol_id": "R23A2_P2_TEMPORAL_BUDGET_VALIDATION_v0_1",
-  "state": "STARTED",
+  "state": "FAILED",
   "issue_number": "22",
   "workflow_run_id": "30672735570",
-  "started_at_utc": "2026-07-31T23:23:21.002881+00:00",
+  "finished_at_utc": "2026-07-31T23:25:41.899259+00:00",
+  "step_outcomes": {
+    "install": "success",
+    "reconstruct": "success",
+    "execute": "failure"
+  },
   "multiprocess_guardrail": "P2 is one mechanism/state only; no dominant route or global classifier."
 }
