@@ -1,0 +1,39 @@
+name: R19 Archive Probe
+
+on:
+  push:
+    branches:
+      - agent/r19-positioning-liquidation-state
+    paths:
+      - 'research/r19_positioning_liquidation/**'
+      - '.github/workflows/r19_archive_probe.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'research/r19_positioning_liquidation/**'
+      - '.github/workflows/r19_archive_probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Probe official Binance archives
+        run: python research/r19_positioning_liquidation/probe_archives.py
+      - name: Upload probe
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: R19_ARCHIVE_PROBE_v0_1
+          path: artifacts/r19_archive_probe_v0_1
+          if-no-files-found: error
+          retention-days: 30
