@@ -35,11 +35,13 @@ jobs:
       - name: Reconstruct exact R18 payload
         run: python research/r18_five_minute_cross_price/bootstrap_payload.py
       - name: Verify payload syntax
-        run: python -m py_compile research/r18_five_minute_cross_price/run_r18.py
+        run: |
+          python -m py_compile research/r18_five_minute_cross_price/run_r18.py
+          python -m py_compile research/r18_five_minute_cross_price/run_r18_compat.py
       - name: Install dependencies
         run: python -m pip install --upgrade pip && pip install -r research/r18_five_minute_cross_price/requirements.txt
       - name: Execute R18 tribunal
-        run: python research/r18_five_minute_cross_price/run_r18.py
+        run: python research/r18_five_minute_cross_price/run_r18_compat.py
       - name: Package evidence
         if: always()
         run: |
