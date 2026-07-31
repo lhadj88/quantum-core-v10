@@ -1,0 +1,58 @@
+name: R18 Five-Minute Cross-Price
+
+on:
+  push:
+    branches:
+      - agent/r18-five-minute-cross-price
+    paths:
+      - 'research/r18_five_minute_cross_price/**'
+      - '.github/workflows/r18_five_minute_cross_price.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'research/r18_five_minute_cross_price/**'
+      - '.github/workflows/r18_five_minute_cross_price.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONHASHSEED: '20260731'
+
+jobs:
+  tribunal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: research/r18_five_minute_cross_price/requirements.txt
+      - name: Reconstruct exact R18 payload
+        run: python research/r18_five_minute_cross_price/bootstrap_payload.py
+      - name: Verify payload syntax
+        run: python -m py_compile research/r18_five_minute_cross_price/run_r18.py
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r research/r18_five_minute_cross_price/requirements.txt
+      - name: Execute R18 tribunal
+        run: python research/r18_five_minute_cross_price/run_r18.py
+      - name: Package evidence
+        if: always()
+        run: |
+          if [ -d artifacts/r18_five_minute_cross_price_v0_1 ]; then
+            tar -czf R18_FIVE_MINUTE_CROSS_PRICE_v0_1.tar.gz artifacts/r18_five_minute_cross_price_v0_1
+          fi
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: R18_FIVE_MINUTE_CROSS_PRICE_v0_1
+          path: |
+            artifacts/r18_five_minute_cross_price_v0_1
+            R18_FIVE_MINUTE_CROSS_PRICE_v0_1.tar.gz
+          if-no-files-found: error
+          retention-days: 30
