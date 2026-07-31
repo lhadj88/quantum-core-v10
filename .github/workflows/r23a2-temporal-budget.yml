@@ -1,6 +1,12 @@
 name: R23A2 temporal budget execution
 
 on:
+  push:
+    branches:
+      - agent/r23a2-multiprocess-temporal-budget
+    paths:
+      - 'r23a2/**'
+      - '.github/workflows/r23a2-temporal-budget.yml'
   pull_request:
     branches: [main]
     paths:
