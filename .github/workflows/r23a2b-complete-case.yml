@@ -1,0 +1,158 @@
+name: R23A2B complete-case temporal budget
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: read
+
+jobs:
+  execute:
+    if: github.event.issue.title == 'RUN R23A2B COMPLETE CASE'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/r23a2-multiprocess-temporal-budget
+          fetch-depth: 0
+      - name: Publish STARTED marker
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          mkdir -p r23a2b
+          python - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          status = {
+            'protocol_id': 'R23A2B_P2_TEMPORAL_BUDGET_COMPLETE_CASE_v0_1',
+            'state': 'STARTED',
+            'issue_number': os.environ.get('ISSUE_NUMBER'),
+            'workflow_run_id': os.environ.get('RUN_ID'),
+            'started_at_utc': datetime.now(timezone.utc).isoformat(),
+            'eligible_events': 202,
+            'multiprocess_guardrail': 'P2 is one mechanism/state only; no dominant route or global classifier.'
+          }
+          open('r23a2b/RUN_STATUS.json','w').write(json.dumps(status, indent=2)+'\n')
+          PY
+          git add r23a2b/RUN_STATUS.json
+          git commit -m 'mark R23A2B execution started'
+          git push origin HEAD:agent/r23a2-multiprocess-temporal-budget
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          RUN_ID: ${{ github.run_id }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        id: install
+        continue-on-error: true
+        run: python -m pip install --upgrade pip numpy pandas scipy requests tabulate
+      - name: Reconstruct frozen complete-case input and engine
+        id: reconstruct
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          import glob
+          from pathlib import Path
+          import pandas as pd
+
+          excluded = {'2021-03-05T16:00:00Z'}
+          files = sorted(glob.glob('r23a2/input_parts/input_events_part_*.csv'))
+          assert len(files) == 5, files
+          df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+          assert len(df) == 203 and df['event_id'].is_unique
+          observed_exclusions = set(df.loc[df['event_id'].isin(excluded), 'event_id'])
+          assert observed_exclusions == excluded, observed_exclusions
+          eligible = df.loc[~df['event_id'].isin(excluded)].copy()
+          assert len(eligible) == 202 and eligible['event_id'].is_unique
+          eligible.to_csv('r23a2b/input_events_202.csv', index=False)
+
+          source = ''.join(Path(p).read_text() for p in sorted(glob.glob('r23a2/script_parts/run_r23a2_part_*.txt')))
+          replacements = {
+            "R23A2_P2_TEMPORAL_BUDGET_VALIDATION_v0_1": "R23A2B_P2_TEMPORAL_BUDGET_COMPLETE_CASE_v0_1",
+            "R23A2_EXECUTION_AMENDMENT_v0_1": "R23A2B_COMPLETE_CASE_PROTOCOL_v0_1",
+            "default='r23a2/input_events.csv'": "default='r23a2b/input_events_202.csv'",
+            "default='r23a2/output'": "default='r23a2b/output'",
+            "default='r23a2/00_PREREGISTRATION.json'": "default='r23a2b/00_PREREGISTRATION.json'",
+            "default='r23a2/00_EXECUTION_AMENDMENT.md'": "default='r23a2b/00_COMPLETE_CASE_PROTOCOL.md'",
+            "len(ev)!=203": "len(ev)!=202",
+            "Frozen input must contain 203 unique events": "Frozen input must contain 202 unique events",
+            "# R23A2 — Rapport maître": "# R23A2B — Rapport maître",
+            "R23A2 ne teste qu’un mécanisme partiel": "R23A2B ne teste qu’un mécanisme partiel"
+          }
+          for old, new in replacements.items():
+              assert old in source, old
+              source = source.replace(old, new)
+          Path('r23a2b/run_r23a2b.py').write_text(source)
+          PY
+          python -m py_compile r23a2b/run_r23a2b.py
+      - name: Execute frozen R23A2B tribunal
+        id: execute
+        if: steps.reconstruct.outcome == 'success'
+        continue-on-error: true
+        run: |
+          rm -rf r23a2b/output
+          set -o pipefail
+          python r23a2b/run_r23a2b.py \
+            --input r23a2b/input_events_202.csv \
+            --output r23a2b/output \
+            --prereg r23a2b/00_PREREGISTRATION.json \
+            --amendment r23a2b/00_COMPLETE_CASE_PROTOCOL.md \
+            2>&1 | tee r23a2b/RUN_LOG.txt
+      - name: Freeze executable, input and final status
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, os, shutil
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          outcomes = {
+            'install': os.environ.get('INSTALL_OUTCOME'),
+            'reconstruct': os.environ.get('RECONSTRUCT_OUTCOME'),
+            'execute': os.environ.get('EXECUTE_OUTCOME')
+          }
+          state = 'SUCCEEDED' if outcomes['execute'] == 'success' else 'FAILED'
+          status = {
+            'protocol_id': 'R23A2B_P2_TEMPORAL_BUDGET_COMPLETE_CASE_v0_1',
+            'state': state,
+            'issue_number': os.environ.get('ISSUE_NUMBER'),
+            'workflow_run_id': os.environ.get('RUN_ID'),
+            'finished_at_utc': datetime.now(timezone.utc).isoformat(),
+            'eligible_events': 202,
+            'excluded_event': '2021-03-05T16:00:00Z',
+            'step_outcomes': outcomes,
+            'multiprocess_guardrail': 'P2 is one mechanism/state only; no dominant route or global classifier.'
+          }
+          Path('r23a2b/RUN_STATUS.json').write_text(json.dumps(status, indent=2)+'\n')
+          out = Path('r23a2b/output')
+          if out.exists():
+              shutil.copy2('r23a2b/run_r23a2b.py', out/'11_EXECUTION_SCRIPT.py')
+              shutil.copy2('r23a2b/input_events_202.csv', out/'12_FROZEN_INPUT_202.csv')
+              shutil.copy2('r23a2b/00_DATA_ELIGIBILITY_EXCLUSIONS.csv', out/'13_DATA_ELIGIBILITY_EXCLUSIONS.csv')
+              import hashlib
+              rows=[]
+              for p in sorted(out.iterdir()):
+                  if p.is_file() and p.name != 'SHA256SUMS.txt':
+                      rows.append(f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}")
+              (out/'SHA256SUMS.txt').write_text('\n'.join(rows)+'\n')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add r23a2b/RUN_STATUS.json
+          test ! -f r23a2b/RUN_LOG.txt || git add r23a2b/RUN_LOG.txt
+          test ! -f r23a2b/input_events_202.csv || git add r23a2b/input_events_202.csv
+          test ! -f r23a2b/run_r23a2b.py || git add r23a2b/run_r23a2b.py
+          test ! -d r23a2b/output || git add r23a2b/output
+          git commit -m 'record R23A2B frozen complete-case results'
+          git push origin HEAD:agent/r23a2-multiprocess-temporal-budget
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          RUN_ID: ${{ github.run_id }}
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          RECONSTRUCT_OUTCOME: ${{ steps.reconstruct.outcome }}
+          EXECUTE_OUTCOME: ${{ steps.execute.outcome }}
