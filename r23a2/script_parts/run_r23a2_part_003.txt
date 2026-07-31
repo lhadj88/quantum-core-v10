@@ -1,0 +1,70 @@
+def main():
+    ap=argparse.ArgumentParser(); ap.add_argument('--input',default='r23a2/input_events.csv'); ap.add_argument('--output',default='r23a2/output'); ap.add_argument('--prereg',default='r23a2/00_PREREGISTRATION.json'); ap.add_argument('--amendment',default='r23a2/00_EXECUTION_AMENDMENT.md'); args=ap.parse_args()
+    inp=Path(args.input); outdir=Path(args.output); outdir.mkdir(parents=True,exist_ok=True)
+    ev=pd.read_csv(inp)
+    if len(ev)!=203 or not ev['event_id'].is_unique: raise RuntimeError('Frozen input must contain 203 unique events')
+    ev['event_time']=pd.to_datetime(ev['event_id'],utc=True)
+    ev['path_start']=pd.to_datetime(ev['path_start'],utc=True)
+    expected_hash={}
+    for r in ev.itertuples(index=False):
+        d=r.path_start.strftime('%Y-%m-%d')
+        h=str(r.event_day_sha256)
+        if d in expected_hash and expected_hash[d]!=h: raise RuntimeError(f'{d}: conflicting expected hashes')
+        expected_hash[d]=h
+    required_days=set(expected_hash)
+    required_days.update((pd.Timestamp(d)+pd.Timedelta(days=1)).strftime('%Y-%m-%d') for d in list(expected_hash))
+    integrity=[]; days={}; session=requests.Session(); session.headers['User-Agent']='SBC-GANN-R23A2-research/0.1'
+    for day in sorted(required_days):
+        url=f'https://data.binance.vision/data/spot/daily/klines/BTCUSDT/5m/BTCUSDT-5m-{day}.zip'
+        expected=expected_hash.get(day,'')
+        blob=fetch(session,url); actual=sha256_bytes(blob); status='OK'
+        if expected and actual.lower()!=expected.lower(): status='HASH_MISMATCH'
+        df,unit,raw_bytes=parse_daily_zip(blob,day)
+        if status!='OK': raise RuntimeError(f'{day}: {status}')
+        days[day]=df
+        dif=np.diff(df.open_time.to_numpy(np.int64)); full_cont=bool(len(dif)==0 or np.all(dif==300000))
+        role='EVENT_DAY' if day in expected_hash else 'NEXT_DAY'
+        if day in expected_hash and any((pd.Timestamp(x)+pd.Timedelta(days=1)).strftime('%Y-%m-%d')==day for x in expected_hash): role='EVENT_AND_NEXT_DAY'
+        integrity.append({'day':day,'role':role,'url':url,'expected_sha256':expected,'actual_sha256':actual,'zip_bytes':len(blob),'csv_bytes':raw_bytes,'rows':len(df),'timestamp_unit_source':unit,'full_day_continuity':full_cont,'status':status})
+    pd.DataFrame(integrity).to_csv(outdir/'01_ARCHIVE_INTEGRITY.csv',index=False)
+    records=[]
+    for r in ev.itertuples(index=False):
+        d0=r.path_start.strftime('%Y-%m-%d'); d1=(r.path_start+pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+        allbars=pd.concat([days[d0],days[d1]],ignore_index=True).sort_values('open_time').drop_duplicates('open_time',keep=False)
+        start_ms=int(r.path_start.timestamp()*1000); exp=expected_times(start_ms)
+        path=allbars[allbars.open_time.isin(exp)].sort_values('open_time')
+        got=path.open_time.to_numpy(np.int64)
+        if len(path)!=144 or not np.array_equal(got,exp):
+            missing=sorted(set(exp)-set(got)); extra=sorted(set(got)-set(exp)); raise RuntimeError(f'{r.event_id}: discontinuous path rows={len(path)} missing={missing[:5]} extra={extra[:5]}')
+        records.append(path_metrics(r,path))
+    paths=pd.DataFrame(records)
+    paths.to_csv(outdir/'02_EVENT_PATH_LEDGER.csv',index=False,float_format='%.17g')
+    primary,verdict,result=run_tests(paths,outdir)
+    report=f"""# R23A2 — Rapport maître
+
+**Verdict :** `{verdict}`  
+**Événements :** {len(paths)}  
+**Usage :** recherche uniquement ; aucune autorisation de trading.
+
+## Résultats primaires
+
+{primary.to_markdown(index=False)}
+
+## Interprétation canonique
+
+R23A2 ne teste qu’un mécanisme partiel : le budget de réversion déjà consommé avant 20:00 UTC. Même si les deux tests passent, P2 n’est ni une route dominante ni une loi universelle. Il devient seulement un état de transition admissible dans une future phénoménologie causale multi-processus.
+
+Les mécanismes d’épuisement, d’absorption, de continuation, de libération retardée et d’ambiguïté restent distincts. Leur représentation devra être recherchée séparément avec des observables causaux adaptés.
+
+`R23B_authorized = false` : aucune procédure directionnelle globale n’est promue par ce tribunal.
+"""
+    (outdir/'08_MASTER_REPORT.md').write_text(report)
+    # Copy protocol/amendment into output for immutability
+    for src,name in [(Path(args.prereg),'09_PREREGISTRATION.json'),(Path(args.amendment),'10_EXECUTION_AMENDMENT.md')]:
+        (outdir/name).write_bytes(src.read_bytes())
+    sums=[]
+    for p in sorted(outdir.iterdir()):
+        if p.is_file() and p.name!='SHA256SUMS.txt': sums.append(f'{sha256_file(p)}  {p.name}')
+    (outdir/'SHA256SUMS.txt').write_text('\n'.join(sums)+'\n')
+    print(json.dumps(result,indent=2))
+if __name__=='__main__': main()
