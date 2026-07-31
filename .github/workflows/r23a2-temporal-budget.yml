@@ -1,21 +1,23 @@
 name: R23A2 temporal budget execution
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - 'r23a2/**'
-      - '.github/workflows/r23a2-temporal-budget.yml'
+  issues:
+    types: [opened]
 
 permissions:
-  contents: read
+  contents: write
+  issues: read
 
 jobs:
   execute:
+    if: github.event.issue.title == 'RUN R23A2 TEMPORAL BUDGET'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: agent/r23a2-multiprocess-temporal-budget
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -37,17 +39,16 @@ jobs:
           python -m py_compile r23a2/run_r23a2.py
       - name: Execute frozen R23A2
         run: |
+          rm -rf r23a2/output
           python r23a2/run_r23a2.py \
             --input r23a2/input_events.csv \
             --output r23a2/output \
             --prereg r23a2/00_PREREGISTRATION.json \
             --amendment r23a2/00_EXECUTION_AMENDMENT.md
-      - name: Package outputs
+      - name: Commit immutable outputs to experimental branch
         run: |
-          cd r23a2
-          zip -r R23A2_TEMPORAL_BUDGET_RESULTS.zip output 00_PREREGISTRATION.json 00_EXECUTION_AMENDMENT.md README.md
-      - uses: actions/upload-artifact@v4
-        with:
-          name: R23A2_TEMPORAL_BUDGET_RESULTS
-          path: r23a2/R23A2_TEMPORAL_BUDGET_RESULTS.zip
-          retention-days: 7
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add r23a2/output
+          git commit -m 'record R23A2 frozen results'
+          git push origin HEAD:agent/r23a2-multiprocess-temporal-budget
