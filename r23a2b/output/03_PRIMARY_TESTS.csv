@@ -1,0 +1,3 @@
+test,estimate,metric,ci_low,ci_high,p_one_sided,p_holm,years_direction_pass,gate_pass,beta,score_z
+T1,0.0409980643504,Spearman_rho,-0.100518247457,0.172799445799,0.5800419958,1,3,False,,
+T2,1.03718944494,hazard_ratio,0.883217638272,1.20172052735,0.717728227177,1,3,False,0.0365145981317,0.571093686143

@@ -1,0 +1,12 @@
+metric,spearman_rho,n
+max_counter_h1,0.0409980643504,202
+max_counter_h3,0.0301259262845,202
+max_counter_h6,0.0475234421464,202
+max_counter_h12,-0.0362953801446,202
+max_aligned_h1,-0.0273291907382,202
+max_aligned_h3,0.0785210119275,202
+max_aligned_h6,0.110811999162,202
+max_aligned_h12,0.0969908917263,202
+time_max_counter_min,-0.11768406173,202
+sign_change_count,0.0139771178633,202
+auc_counter_fraction_hours,-0.0616947062456,202
