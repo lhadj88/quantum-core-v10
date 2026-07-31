@@ -1,0 +1,60 @@
+name: R19 Positioning Liquidation State
+
+on:
+  push:
+    branches:
+      - agent/r19-positioning-liquidation-state
+    paths:
+      - 'research/r19_positioning_liquidation/**'
+      - '.github/workflows/r19_positioning_liquidation.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'research/r19_positioning_liquidation/**'
+      - '.github/workflows/r19_positioning_liquidation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONHASHSEED: '20260731'
+
+jobs:
+  tribunal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: research/r19_positioning_liquidation/requirements.txt
+      - name: Reconstruct exact R18 event universe
+        run: python research/r18_five_minute_cross_price/bootstrap_payload.py
+      - name: Reconstruct exact R19 payload
+        run: python research/r19_positioning_liquidation/bootstrap_payload.py
+      - name: Verify payload syntax
+        run: python -m py_compile research/r19_positioning_liquidation/run_r19.py
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r research/r19_positioning_liquidation/requirements.txt
+      - name: Execute R19 tribunal
+        run: python research/r19_positioning_liquidation/run_r19.py
+      - name: Package evidence
+        if: always()
+        run: |
+          if [ -d artifacts/r19_positioning_liquidation_state_v0_1 ]; then
+            tar -czf R19_POSITIONING_LIQUIDATION_STATE_v0_1.tar.gz artifacts/r19_positioning_liquidation_state_v0_1
+          fi
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: R19_POSITIONING_LIQUIDATION_STATE_v0_1
+          path: |
+            artifacts/r19_positioning_liquidation_state_v0_1
+            R19_POSITIONING_LIQUIDATION_STATE_v0_1.tar.gz
+          if-no-files-found: error
+          retention-days: 30
