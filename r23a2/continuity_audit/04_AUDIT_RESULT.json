@@ -1,0 +1,17 @@
+{
+  "audit_id": "R23A2_CONTINUITY_AUDIT_v0_1",
+  "scope": "availability_and_integrity_only_no_outcome_statistics",
+  "input_events": 203,
+  "required_daily_archives": 387,
+  "downloaded_and_parsed_archives": 387,
+  "archive_failures": 0,
+  "event_day_hash_failures": 0,
+  "complete_events": 202,
+  "incomplete_events": 1,
+  "total_missing_5m_intervals": 18,
+  "all_203_complete": false,
+  "r23a2_original_stop_rule_satisfied": false,
+  "statistics_executed": false,
+  "imputation_performed": false,
+  "multiprocess_guardrail": "This audit addresses path availability only. It neither validates nor falsifies P2 or any other process in the causal multi-process phenomenology."
+}
