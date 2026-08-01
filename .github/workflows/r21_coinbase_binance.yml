@@ -1,0 +1,68 @@
+name: R21 Coinbase-Binance Leadership
+
+on:
+  push:
+    branches:
+      - agent/r21-coinbase-binance-leadership
+    paths:
+      - 'research/r21_coinbase_binance/**'
+      - '.github/workflows/r21_coinbase_binance.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'research/r21_coinbase_binance/**'
+      - '.github/workflows/r21_coinbase_binance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  PYTHONHASHSEED: '20260731'
+
+jobs:
+  tribunal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Fetch frozen exposed R20 event targets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/r21_r20
+          curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/lhadj88/quantum-core-v10/actions/artifacts/8781320150/zip -o /tmp/r20.zip
+          unzip -q /tmp/r20.zip -d /tmp/r21_r20
+          TARGETS=$(find /tmp/r21_r20 -type f -name '01_EVENT_TARGETS.csv' | head -n 1)
+          test -n "${TARGETS}"
+          cp "${TARGETS}" research/r21_coinbase_binance/01_EVENT_TARGETS.csv
+          sha256sum research/r21_coinbase_binance/01_EVENT_TARGETS.csv
+      - name: Verify engine syntax
+        run: python -m py_compile research/r21_coinbase_binance/run_r21.py
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r research/r21_coinbase_binance/requirements.txt
+      - name: Execute R21 tribunal
+        run: python research/r21_coinbase_binance/run_r21.py
+      - name: Package evidence
+        if: always()
+        run: |
+          if [ -d artifacts/r21_coinbase_binance_leadership_v0_1 ]; then
+            tar -czf R21_COINBASE_BINANCE_LEADERSHIP_v0_1.tar.gz artifacts/r21_coinbase_binance_leadership_v0_1
+          fi
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: R21_COINBASE_BINANCE_LEADERSHIP_v0_1
+          path: |
+            artifacts/r21_coinbase_binance_leadership_v0_1
+            R21_COINBASE_BINANCE_LEADERSHIP_v0_1.tar.gz
+          if-no-files-found: error
+          retention-days: 30
