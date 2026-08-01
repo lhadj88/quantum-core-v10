@@ -62,7 +62,28 @@ jobs:
           cat r24a/frozen/run_r24a.py.gz.b64.part_001 r24a/frozen/run_r24a.py.gz.b64.part_002 > /tmp/run_r24a.py.gz.b64
           test "$(sha256sum /tmp/run_r24a.py.gz.b64 | cut -d' ' -f1)" = "5bd12ed51dad1a7487aacd8be0f12be88576716e84e5a321a5f1232ddf8d826a"
           base64 -d /tmp/run_r24a.py.gz.b64 | gzip -d > r24a/run_r24a.py
-          cp r23a2b/input_events_202.csv r24a/input_events_202.csv
+
+          cat r24a/frozen/route_perp_map.csv.gz.b64.part_001 r24a/frozen/route_perp_map.csv.gz.b64.part_002 r24a/frozen/route_perp_map.csv.gz.b64.part_003 > /tmp/route_perp_map.csv.gz.b64
+          test "$(sha256sum /tmp/route_perp_map.csv.gz.b64 | cut -d' ' -f1)" = "8620d5e99a2ae583816d9136e02da890e65b1b4f5c2f0ce1128a15231c1915fe"
+          base64 -d /tmp/route_perp_map.csv.gz.b64 | gzip -d > r24a/route_perp_map.csv
+          test "$(sha256sum r24a/route_perp_map.csv | cut -d' ' -f1)" = "53878101ccb35fe4c84ce940d4bb1ad098a9044238dc3cefbca4d4d0dd967cc4"
+
+          python - <<'PY'
+          import pandas as pd
+          base = pd.read_csv('r23a2b/input_events_202.csv')
+          mapping = pd.read_csv('r24a/route_perp_map.csv')
+          assert len(base) == 202 and base['event_id'].is_unique
+          assert len(mapping) == 202 and mapping['event_id'].is_unique
+          merged = base.merge(mapping, on='event_id', how='inner', validate='one_to_one')
+          assert len(merged) == 202
+          day = pd.to_datetime(merged['path_start'], utc=True).dt.strftime('%Y-%m-%d')
+          merged['spot_url'] = 'https://data.binance.vision/data/spot/daily/klines/BTCUSDT/5m/BTCUSDT-5m-' + day + '.zip'
+          merged['spot_sha256'] = merged['event_day_sha256']
+          merged['perp_url'] = 'https://data.binance.vision/data/futures/um/daily/klines/BTCUSDT/5m/BTCUSDT-5m-' + day + '.zip'
+          columns = ['event_id','year','event_sign','event_scale','path_start','cluster_month','route','spot_url','spot_sha256','perp_url','perp_sha256']
+          merged[columns].to_csv('r24a/input_events_202.csv', index=False)
+          PY
+
           test "$(sha256sum r24a/run_r24a.py | cut -d' ' -f1)" = "dcca43cbd2e9a74f1888f77e787ed79f8b9b3288e28526a1a8adc3a9af4eb4f0"
           test "$(sha256sum r24a/input_events_202.csv | cut -d' ' -f1)" = "24a91aa2b447ce63b00576325f9f13e5560f78fc22342ee3a80a52ae5fc0599f"
           test "$(sha256sum r24a/00_PREREGISTRATION.json | cut -d' ' -f1)" = "96b209ff6862be84486e21d13e6d9e0b07e6f46ba814479905f73af8e639d3e3"
@@ -113,7 +134,7 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add r24a/RUN_STATUS.json
           test ! -f r24a/RUN_LOG.txt || git add r24a/RUN_LOG.txt
-          test ! -f r24a/run_r24a.py || git add r24a/run_r24a.py r24a/input_events_202.csv
+          test ! -f r24a/run_r24a.py || git add r24a/run_r24a.py r24a/input_events_202.csv r24a/route_perp_map.csv
           test ! -d r24a/output || git add r24a/output
           git commit -m 'record R24A frozen dynamic atlas outputs'
           git push origin HEAD:agent/r23a2-multiprocess-temporal-budget
