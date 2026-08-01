@@ -1,0 +1,80 @@
+name: Yuga Remotion Studio Render
+on:
+  workflow_dispatch:
+  push:
+    branches: [yuga-remotion-studio-v1]
+    paths:
+      - 'yuga-remotion-studio/**'
+      - '.github/workflows/yuga-remotion-studio-render.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'yuga-remotion-studio/**'
+      - '.github/workflows/yuga-remotion-studio-render.yml'
+permissions:
+  contents: read
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: yuga-remotion-studio
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        working-directory: .
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Generate original audio master
+        run: python scripts/generate-audio.py
+      - name: Normalize audio master
+        run: |
+          ffmpeg -y -i public/audio/yuga-studio-master.wav -af loudnorm=I=-14:TP=-1:LRA=7 public/audio/yuga-studio-master-normalized.wav
+          mv public/audio/yuga-studio-master-normalized.wav public/audio/yuga-studio-master.wav
+      - name: Validate project
+        run: npm run validate
+      - name: TypeScript check
+        run: npx tsc --noEmit
+      - name: Ensure Remotion browser
+        run: npx remotion browser ensure
+      - name: Render native QC frames
+        run: |
+          mkdir -p out/qc
+          npx remotion still src/index.ts YugaStudioFR out/qc/frame-0030.png --frame=30
+          npx remotion still src/index.ts YugaStudioFR out/qc/frame-0180.png --frame=180
+          npx remotion still src/index.ts YugaStudioFR out/qc/frame-0345.png --frame=345
+          npx remotion still src/index.ts YugaStudioFR out/qc/frame-0525.png --frame=525
+          npx remotion still src/index.ts YugaStudioFR out/qc/frame-0660.png --frame=660
+          npx remotion still src/index.ts YugaStudioFR out/qc/frame-0840.png --frame=840
+          npx remotion still src/index.ts YugaStudioFR out/qc/frame-0990.png --frame=990
+          npx remotion still src/index.ts YugaStudioEN out/qc/frame-en-0840.png --frame=840
+      - name: Render French master
+        run: npm run render:fr
+      - name: Render English master
+        run: npm run render:en
+      - name: Technical validation
+        run: python scripts/verify-output.py
+      - name: Build QC contact sheet
+        if: always()
+        run: |
+          if compgen -G 'out/qc/frame-*.png' > /dev/null; then
+            ffmpeg -y -pattern_type glob -i 'out/qc/frame-*.png' -vf "scale=270:480,tile=4x2" -frames:v 1 out/qc/contact-sheet.png
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: yuga-remotion-studio-masters
+          path: |
+            yuga-remotion-studio/out/Yuga_Studio_FR.mp4
+            yuga-remotion-studio/out/Yuga_Studio_EN.mp4
+            yuga-remotion-studio/out/SHA256SUMS.txt
+            yuga-remotion-studio/out/TECHNICAL_REPORT.json
+            yuga-remotion-studio/out/ffprobe-*.json
+            yuga-remotion-studio/out/qc/*.png
+          if-no-files-found: warn
+          retention-days: 14

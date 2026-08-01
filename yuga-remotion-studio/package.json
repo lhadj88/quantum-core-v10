@@ -1,0 +1,23 @@
+{
+  "name": "yuga-remotion-studio-cloud",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "validate": "node scripts/validate-project.mjs",
+    "render:fr": "remotion render src/index.ts YugaStudioFR out/Yuga_Studio_FR.mp4 --codec=h264 --crf=12 --audio-bitrate=320k --pixel-format=yuv420p --concurrency=2",
+    "render:en": "remotion render src/index.ts YugaStudioEN out/Yuga_Studio_EN.mp4 --codec=h264 --crf=12 --audio-bitrate=320k --pixel-format=yuv420p --concurrency=2"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.496",
+    "@remotion/media": "4.0.496",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "remotion": "4.0.496"
+  },
+  "devDependencies": {
+    "@types/react": "19.1.10",
+    "@types/react-dom": "19.1.7",
+    "typescript": "5.9.2"
+  }
+}
