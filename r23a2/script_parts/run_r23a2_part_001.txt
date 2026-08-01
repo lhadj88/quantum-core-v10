@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+import argparse, csv, hashlib, io, json, math, os, sys, time, zipfile
+from pathlib import Path
+from dataclasses import dataclass
+import numpy as np
+import pandas as pd
+import requests
+from scipy.stats import rankdata
+
+SEED=2302
+N_PERM=10000
+N_BOOT=10000
+COLS=['open_time','open','high','low','close','volume','close_time','quote_volume','trades','taker_buy_base','taker_buy_quote','ignore']
+
+
+def sha256_bytes(b:bytes)->str: return hashlib.sha256(b).hexdigest()
+def sha256_file(p:Path)->str:
+    h=hashlib.sha256()
+    with p.open('rb') as f:
+        for c in iter(lambda:f.read(1<<20),b''): h.update(c)
+    return h.hexdigest()
+
+def holm(ps):
+    ps=np.asarray(ps,float); m=len(ps); order=np.argsort(ps); adj=np.empty(m); running=0.0
+    for k,i in enumerate(order):
+        running=max(running,(m-k)*ps[i]); adj[i]=min(1.0,running)
+    return adj
+
+def spearman(x,y):
+    x=np.asarray(x,float); y=np.asarray(y,float)
+    if len(x)<3 or np.nanstd(x)==0 or np.nanstd(y)==0: return np.nan
+    rx=rankdata(x,method='average'); ry=rankdata(y,method='average')
+    return float(np.corrcoef(rx,ry)[0,1])
+
+def fetch(session,url,retries=6):
+    last=None
+    for a in range(retries):
+        try:
+            r=session.get(url,timeout=90)
+            if r.status_code==200: return r.content
+            last=RuntimeError(f'HTTP {r.status_code} {url}')
+        except Exception as e: last=e
+        time.sleep(min(20,2**a))
+    raise last
+
+def parse_daily_zip(blob:bytes,day:str):
+    with zipfile.ZipFile(io.BytesIO(blob)) as z:
+        names=[n for n in z.namelist() if not n.endswith('/')]
+        if len(names)!=1: raise RuntimeError(f'{day}: archive members={names}')
+        raw=z.read(names[0])
+    df=pd.read_csv(io.BytesIO(raw),header=None,names=COLS)
+    df['open_time']=pd.to_numeric(df['open_time'],errors='coerce')
+    df=df[df.open_time.notna()].copy()
+    for c in ['open','high','low','close','volume']:
+        df[c]=pd.to_numeric(df[c],errors='raise')
+    unit='microseconds' if float(df.open_time.median())>1e15 else 'milliseconds'
+    if unit=='microseconds': df['open_time']=(df.open_time//1000).astype('int64')
+    else: df['open_time']=df.open_time.astype('int64')
+    df=df.sort_values('open_time').drop_duplicates('open_time',keep=False)
+    return df,unit,len(raw)
+
+def expected_times(start_ms): return start_ms+np.arange(144,dtype=np.int64)*300000
+
+def path_metrics(row,path):
+    sign=float(row.event_sign); p0=float(path.iloc[0].open); scale=float(row.event_scale)
+    if not (p0>0 and scale>0): raise RuntimeError(f'{row.event_id}: invalid p0/scale')
+    high=np.log(path.high.to_numpy(float)/p0); low=np.log(path.low.to_numpy(float)/p0); close=np.log(path.close.to_numpy(float)/p0)
+    if sign>0:
+        counter=np.maximum(0,-low)/scale; aligned=np.maximum(0,high)/scale
+    else:
+        counter=np.maximum(0,high)/scale; aligned=np.maximum(0,-low)/scale
+    signed_close=sign*close
+    counter_close=np.maximum(0,-signed_close)/scale
+    out={'event_id':row.event_id,'event_time':row.event_time,'year':int(row.year),'cluster_month':row.cluster_month,
+         'event_sign':sign,'P2_score':float(row.P2_score),'event_scale':scale,'price_20utc':p0}
+    horizons={1:12,3:36,6:72,12:144}
+    for h,n in horizons.items():
+        out[f'max_counter_h{h}']=float(np.max(counter[:n])); out[f'max_aligned_h{h}']=float(np.max(aligned[:n]))
+    out['T1_max_counter_60m']=out['max_counter_h1']
+    imax=int(np.argmax(counter)); out['time_max_counter_min']=5*(imax+1)
+    for b in [0.10,0.25,0.50,1.00]:
+        idx=np.flatnonzero(counter>=b)
+        out[f'fp_{b:.2f}_event']=int(len(idx)>0); out[f'fp_{b:.2f}_time_min']=int(5*(idx[0]+1)) if len(idx)>0 else 720
+    # sign changes of nonzero signed displacement at bar closes
+    s=np.sign(signed_close); s=s[s!=0]
+    out['sign_change_count']=int(np.sum(s[1:]!=s[:-1])) if len(s)>1 else 0
+    # trapezoidal integral, fraction-hours
+    out['auc_counter_fraction_hours']=float(np.trapezoid(counter_close,dx=5/60))
+    return out
+
+def bootstrap_indices(df,rng):
+    parts=[]
+    for year,g in df.groupby('year',sort=True):
+        months=sorted(g.cluster_month.unique()); chosen=rng.choice(months,size=len(months),replace=True)
+        for j,m in enumerate(chosen):
+            z=g[g.cluster_month==m].copy(); z['_boot_cluster']=f'{year}-{j}' ; parts.append(z)
+    return pd.concat(parts,ignore_index=True)
+
+def permute_within_year(df,rng):
+    x=df.P2_score.to_numpy(float).copy()
+    for _,idx in df.groupby('year').groups.items():
+        ii=np.asarray(list(idx),int); x[ii]=rng.permutation(x[ii])
+    return x
+
+def cox_components(df,beta,xcol='P2_score',timecol='fp_0.25_time_min',eventcol='fp_0.25_event'):
+    ll=score=info=0.0
+    for _,g in df.groupby('year',sort=True):
+        t=g[timecol].to_numpy(float); e=g[eventcol].to_numpy(int); x=g[xcol].to_numpy(float)
+        for tt in np.unique(t[e==1]):
+            ev=(t==tt)&(e==1); risk=t>=tt; d=int(ev.sum())
+            eta=np.clip(beta*x[risk],-50,50); w=np.exp(eta); sw=w.sum()
+            if sw<=0: continue
+            mx=np.sum(w*x[risk])/sw; vx=np.sum(w*(x[risk]-mx)**2)/sw

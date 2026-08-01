@@ -1,0 +1,94 @@
+            got = joined.loc[joined["open_time"].isin(expected), "open_time"].to_numpy(np.int64)
+        else:
+            got = np.array([], dtype=np.int64)
+
+        missing = sorted(set(int(v) for v in expected) - set(int(v) for v in got))
+        extras = sorted(set(int(v) for v in got) - set(int(v) for v in expected))
+        ranges = compress_ranges(missing)
+        event_rows.append({
+            "event_id": row.event_id,
+            "year": int(row.year),
+            "path_start_utc": row.path_start.isoformat(),
+            "path_end_utc": (row.path_start + pd.Timedelta(hours=12)).isoformat(),
+            "expected_rows": 144,
+            "observed_rows": int(len(got)),
+            "missing_count": int(len(missing)),
+            "extra_count": int(len(extras)),
+            "complete": bool(len(missing) == 0 and len(extras) == 0 and not dependency_errors),
+            "first_missing_utc": iso_utc(missing[0]) if missing else "",
+            "last_missing_interval_open_utc": iso_utc(missing[-1]) if missing else "",
+            "missing_ranges_json": json.dumps(ranges, separators=(",", ":")),
+            "archive_dependency_errors": ";".join(dependency_errors),
+        })
+
+    event_audit = pd.DataFrame(event_rows).sort_values("event_id")
+    event_audit.to_csv(output_dir / "02_EVENT_CONTINUITY_AUDIT.csv", index=False)
+
+    incomplete = event_audit.loc[~event_audit["complete"]].copy()
+    incomplete.to_csv(output_dir / "03_INCOMPLETE_EVENTS.csv", index=False)
+
+    archive_hash_failures = int(
+        ((archive_audit["expected_sha256"] != "") & (archive_audit["hash_match"] != True)).sum()  # noqa: E712
+    )
+    archive_failures = int((~archive_audit["download_ok"] | ~archive_audit["parse_ok"]).sum())
+    summary = {
+        "audit_id": "R23A2_CONTINUITY_AUDIT_v0_1",
+        "scope": "availability_and_integrity_only_no_outcome_statistics",
+        "input_events": int(len(events)),
+        "required_daily_archives": int(len(required_days)),
+        "downloaded_and_parsed_archives": int(len(archives)),
+        "archive_failures": archive_failures,
+        "event_day_hash_failures": archive_hash_failures,
+        "complete_events": int(event_audit["complete"].sum()),
+        "incomplete_events": int((~event_audit["complete"]).sum()),
+        "total_missing_5m_intervals": int(event_audit["missing_count"].sum()),
+        "all_203_complete": bool(event_audit["complete"].all()),
+        "r23a2_original_stop_rule_satisfied": bool(
+            event_audit["complete"].all() and archive_failures == 0 and archive_hash_failures == 0
+        ),
+        "statistics_executed": False,
+        "imputation_performed": False,
+        "multiprocess_guardrail": (
+            "This audit addresses path availability only. It neither validates nor falsifies "
+            "P2 or any other process in the causal multi-process phenomenology."
+        ),
+    }
+    (output_dir / "04_AUDIT_RESULT.json").write_text(json.dumps(summary, indent=2) + "\n")
+
+    lines = [
+        "# R23A2 — Audit de continuité des trajectoires 5 minutes",
+        "",
+        "**Portée :** disponibilité et intégrité uniquement. Aucun test T1/T2, aucune excursion et aucune inférence causale n’ont été exécutés.",
+        "",
+        f"- événements audités : **{summary['input_events']}**",
+        f"- archives quotidiennes requises : **{summary['required_daily_archives']}**",
+        f"- événements complets : **{summary['complete_events']}**",
+        f"- événements incomplets : **{summary['incomplete_events']}**",
+        f"- intervalles 5 minutes manquants : **{summary['total_missing_5m_intervals']}**",
+        f"- échecs de hash sur jours événement : **{summary['event_day_hash_failures']}**",
+        f"- règle d’arrêt originale R23A2 satisfaite : **{summary['r23a2_original_stop_rule_satisfied']}**",
+        "",
+        "## Garde-fou multi-processus",
+        "",
+        "Cet audit ne teste que la disponibilité des trajectoires nécessaires au mécanisme P2. Il ne recherche pas une route dominante et ne modifie le statut d’aucun autre procédé.",
+    ]
+    if len(incomplete):
+        lines.extend(["", "## Fenêtres incomplètes", ""])
+        for row in incomplete.itertuples(index=False):
+            lines.append(
+                f"- `{row.event_id}` : {row.observed_rows}/144 lignes, "
+                f"{row.missing_count} manquantes, première lacune `{row.first_missing_utc}`."
+            )
+    (output_dir / "05_AUDIT_REPORT.md").write_text("\n".join(lines) + "\n")
+
+    checksums = []
+    for path in sorted(output_dir.iterdir()):
+        if path.is_file() and path.name != "SHA256SUMS.txt":
+            checksums.append(f"{sha256_file(path)}  {path.name}")
+    (output_dir / "SHA256SUMS.txt").write_text("\n".join(checksums) + "\n")
+
+    print(json.dumps(summary, indent=2))
+
+
+if __name__ == "__main__":
+    main()

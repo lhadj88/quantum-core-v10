@@ -1,0 +1,2 @@
+event_id,reason,missing_count,missing_start_utc,missing_end_utc,selection_basis
+2021-03-05T16:00:00Z,official_5m_path_incomplete,18,2021-03-06T02:00:00Z,2021-03-06T03:30:00Z,availability_only_before_statistics

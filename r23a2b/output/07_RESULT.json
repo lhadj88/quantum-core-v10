@@ -1,0 +1,13 @@
+{
+  "protocol_id": "R23A2B_P2_TEMPORAL_BUDGET_COMPLETE_CASE_v0_1",
+  "execution_amendment": "R23A2B_COMPLETE_CASE_PROTOCOL_v0_1",
+  "seed": 2302,
+  "n_permutations": 10000,
+  "n_bootstraps": 10000,
+  "events": 202,
+  "T1_gate": false,
+  "T2_gate": false,
+  "verdict": "P2_ROUTE_ASSOCIATION_ONLY_MECHANISM_FORMULATION_CLOSED",
+  "R23B_authorized": false,
+  "multiprocess_guardrail": "P2 is one mechanism/state only; no universal route or global classifier is promoted."
+}

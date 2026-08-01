@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/home/runner/work/quantum-core-v10/quantum-core-v10/r23a2/run_r23a2.py", line 268, in <module>
+    if __name__=='__main__': main()
+                             ^^^^^^
+  File "/home/runner/work/quantum-core-v10/quantum-core-v10/r23a2/run_r23a2.py", line 236, in main
+    missing=sorted(set(exp)-set(got)); extra=sorted(set(got)-set(exp)); raise RuntimeError(f'{r.event_id}: discontinuous path rows={len(path)} missing={missing[:5]} extra={extra[:5]}')
+                                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: 2021-03-05T16:00:00Z: discontinuous path rows=126 missing=[np.int64(1614996000000), np.int64(1614996300000), np.int64(1614996600000), np.int64(1614996900000), np.int64(1614997200000)] extra=[]

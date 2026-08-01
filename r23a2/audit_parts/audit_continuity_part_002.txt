@@ -1,0 +1,105 @@
+    return ranges
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input", default="r23a2/input_events.csv")
+    parser.add_argument("--output", default="r23a2/continuity_audit")
+    args = parser.parse_args()
+
+    input_path = Path(args.input)
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    events = pd.read_csv(input_path)
+    if len(events) != 203 or not events["event_id"].is_unique:
+        raise RuntimeError("Frozen input must contain 203 unique events")
+    events["path_start"] = pd.to_datetime(events["path_start"], utc=True)
+
+    expected_hash: dict[str, str] = {}
+    for row in events.itertuples(index=False):
+        day = row.path_start.strftime("%Y-%m-%d")
+        digest = str(row.event_day_sha256).lower()
+        if day in expected_hash and expected_hash[day] != digest:
+            raise RuntimeError(f"{day}: conflicting expected hashes")
+        expected_hash[day] = digest
+
+    required_days = set(expected_hash)
+    required_days.update(
+        (pd.Timestamp(day) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        for day in list(expected_hash)
+    )
+
+    session = requests.Session()
+    session.headers["User-Agent"] = "SBC-GANN-R23A2-continuity-audit/0.1"
+
+    archives: dict[str, pd.DataFrame] = {}
+    archive_rows: list[dict[str, object]] = []
+    for day in sorted(required_days):
+        url = (
+            "https://data.binance.vision/data/spot/daily/klines/"
+            f"BTCUSDT/5m/BTCUSDT-5m-{day}.zip"
+        )
+        expected = expected_hash.get(day, "")
+        record: dict[str, object] = {
+            "day": day,
+            "url": url,
+            "role": "EVENT_DAY" if day in expected_hash else "NEXT_DAY",
+            "expected_sha256": expected,
+            "actual_sha256": "",
+            "hash_match": "",
+            "download_ok": False,
+            "parse_ok": False,
+            "rows": 0,
+            "duplicate_timestamp_rows": 0,
+            "timestamp_unit_source": "",
+            "first_open_utc": "",
+            "last_open_utc": "",
+            "full_day_5m_continuity": False,
+            "error": "",
+        }
+        try:
+            blob = fetch(session, url)
+            actual = sha256_bytes(blob)
+            record["download_ok"] = True
+            record["actual_sha256"] = actual
+            record["hash_match"] = (actual.lower() == expected.lower()) if expected else "NOT_PREDECLARED"
+            frame, unit, _raw_bytes, duplicate_rows = parse_daily_zip(blob, day)
+            record["parse_ok"] = True
+            record["rows"] = int(len(frame))
+            record["duplicate_timestamp_rows"] = duplicate_rows
+            record["timestamp_unit_source"] = unit
+            record["first_open_utc"] = iso_utc(int(frame["open_time"].min()))
+            record["last_open_utc"] = iso_utc(int(frame["open_time"].max()))
+            differences = np.diff(frame["open_time"].to_numpy(np.int64))
+            record["full_day_5m_continuity"] = bool(
+                len(frame) == 288 and len(differences) == 287 and np.all(differences == 300_000)
+            )
+            archives[day] = frame
+        except Exception as exc:  # audit must report rather than silently omit
+            record["error"] = f"{type(exc).__name__}: {exc}"
+        archive_rows.append(record)
+
+    archive_audit = pd.DataFrame(archive_rows)
+    archive_audit.to_csv(output_dir / "01_ARCHIVE_INTEGRITY.csv", index=False)
+
+    event_rows: list[dict[str, object]] = []
+    for row in events.itertuples(index=False):
+        day0 = row.path_start.strftime("%Y-%m-%d")
+        day1 = (row.path_start + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        start_ms = int(row.path_start.timestamp() * 1000)
+        expected = expected_times(start_ms)
+        dependency_errors = []
+        frames = []
+        for day in (day0, day1):
+            if day not in archives:
+                dependency_errors.append(day)
+            else:
+                frames.append(archives[day])
+
+        if frames:
+            joined = (
+                pd.concat(frames, ignore_index=True)
+                .sort_values("open_time")
+                .drop_duplicates("open_time", keep=False)
+            )

@@ -1,0 +1,82 @@
+{
+  "protocol_id": "R24A_DYNAMIC_MULTIPROCESS_TRANSITION_ATLAS_v0_1",
+  "created_date": "2026-07-31",
+  "status": "PREREGISTERED_BEFORE_POST_20_MULTISOURCE_PATH_ANALYSIS",
+  "research_only": true,
+  "trading_authorized": false,
+  "objective": "Reconstruct a causal-time dynamic atlas of post-20:00 process morphologies without searching for a dominant route or fitting a directional classifier.",
+  "relationship_to_prior_work": {
+    "R18_difference": "R18 used causal variables available before 20:00. R24A studies the subsequent 5-minute process trajectory from 20:00 to +12h.",
+    "R23A2B_result": "P2 route association did not survive continuous-path validation; P2 is not reused as a predictor.",
+    "route_labels": "R20 routes are observable outcomes used for mapping only, not assumed causes."
+  },
+  "universe": {
+    "starting_events": 202,
+    "years": [2021, 2022, 2023, 2024, 2025, 2026],
+    "exposure": "fully exposed development data",
+    "eligibility": "exact 144 unique 5-minute timestamps for both Binance BTCUSDT spot and USD-M perpetual from 20:00 UTC inclusive to 08:00 UTC exclusive; event-day hashes must match the R18 source ledger; no imputation or cross-venue splice"
+  },
+  "data": {
+    "spot": "official Binance spot daily 5m klines",
+    "perpetual": "official Binance USD-M futures daily 5m klines",
+    "window": "20:00 UTC through +12h",
+    "event_scale": "abs(event_ret_4h) + retreat_from_extreme, frozen in R23A2 input"
+  },
+  "dynamic_coordinates": [
+    "event-aligned normalized spot close displacement",
+    "event-aligned normalized perpetual close displacement",
+    "spot aligned and counter intrabar excursions",
+    "cumulative volume-weighted event-aligned taker flow for spot",
+    "cumulative volume-weighted event-aligned taker flow for perpetual",
+    "spot-minus-perpetual cumulative flow lead",
+    "perpetual-minus-spot normalized price displacement",
+    "change in log perpetual/spot basis from 20:00"
+  ],
+  "primary_topology": {
+    "barrier_fraction": 0.25,
+    "aligned_first_passage": "first 5-minute interval whose event-aligned spot intrabar excursion reaches +0.25 event_scale",
+    "counter_first_passage": "first 5-minute interval whose counter-directional spot intrabar excursion reaches 0.25 event_scale",
+    "classes": [
+      "UNRESOLVED",
+      "SIMULTANEOUS",
+      "ALIGNED_ONLY",
+      "COUNTER_ONLY",
+      "ALIGNED_THEN_COUNTER",
+      "COUNTER_THEN_ALIGNED"
+    ]
+  },
+  "secondary_topologies": {
+    "barrier_fractions": [0.5, 1.0],
+    "status": "descriptive_only"
+  },
+  "primary_structural_test": {
+    "statistic": "normalized mutual information between primary topology and R20 route",
+    "permutation": "10000 route-label permutations within year",
+    "bootstrap": "10000 calendar year-month cluster bootstraps",
+    "seed": 2401,
+    "gate": "one-sided permutation p < 0.05, bootstrap 95% lower bound > 0, and at least three topology classes with n >= 15 that each occur in at least four years and both polarities",
+    "interpretation": "A pass demonstrates that dynamic topology is a meaningful phenomenological coordinate; it does not demonstrate prediction or causal identification."
+  },
+  "secondary_outputs": [
+    "route distribution and route entropy within each topology",
+    "topology distribution by year and polarity",
+    "first-passage time distributions at barriers 0.25, 0.50 and 1.00",
+    "pre-first-passage spot/perpetual cumulative flow signatures",
+    "basis and price-divergence signatures at first passage",
+    "H1/H3/H6/H12 terminal displacement by topology"
+  ],
+  "forbidden": [
+    "no supervised classifier",
+    "no threshold search",
+    "no topology merge after reading results",
+    "no route relabeling",
+    "no use of future observations before their timestamp",
+    "no trading rule or R23B promotion"
+  ],
+  "decision_labels": [
+    "DYNAMIC_TOPOLOGY_STRUCTURALLY_ASSOCIATED_WITH_ROUTE",
+    "DYNAMIC_TOPOLOGY_DESCRIPTIVE_ONLY",
+    "MULTISOURCE_PATH_DATA_INSUFFICIENT"
+  ],
+  "multiprocess_guardrail": "The atlas seeks a grammar of multiple processes and transitions. No topology may be interpreted as a permanently dominant route."
+}

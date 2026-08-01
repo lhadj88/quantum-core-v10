@@ -1,0 +1,71 @@
+{
+  "protocol_id": "R23A2_P2_TEMPORAL_BUDGET_VALIDATION_v0_1",
+  "created_date": "2026-07-31",
+  "status": "PREREGISTERED_NOT_EXECUTED",
+  "research_only": true,
+  "trading_authorized": false,
+  "trigger": "P2 alone passed R23A v0.3; R23B not authorized.",
+  "objective": "Determine whether P2 represents genuine pre-20:00 reversion consumption by testing post-20:00 continuous trajectories, rather than only discrete R20 route labels.",
+  "universe": {
+    "events": 203,
+    "reason": "P2 score and cross-price coordinate available",
+    "exposure": "2021-2026 fully exposed"
+  },
+  "predictor": {
+    "name": "P2_score",
+    "source": "R23A v0.3 frozen LOYO score",
+    "formula_change_allowed": false
+  },
+  "path_data": {
+    "market": "Binance BTCUSDT spot",
+    "resolution": "5m",
+    "window": "20:00 UTC through +12h",
+    "source": "official daily kline archives referenced by R18 source ledger; event day plus next calendar day",
+    "integrity": "record URL, SHA-256, rows and continuity; stop on missing interval"
+  },
+  "normalization": {
+    "event_scale": "abs(event_ret_4h) + retreat_from_extreme",
+    "counter_excursion_fraction": "max(0, -event_sign * log(price_t/price_20utc)) / event_scale",
+    "aligned_excursion_fraction": "max(0, event_sign * log(price_t/price_20utc)) / event_scale"
+  },
+  "primary_tests": [
+    {
+      "id": "T1",
+      "outcome": "maximum counter_excursion_fraction in first 60 minutes",
+      "expected": "Spearman rho(P2_score, outcome) < 0",
+      "gate": "negative direction in at least four evaluable years and calendar-block bootstrap CI below zero"
+    },
+    {
+      "id": "T2",
+      "outcome": "cause-specific first passage to counter_excursion_fraction >= 0.25 by 12h",
+      "expected": "one-SD higher P2_score reduces counter-passage hazard",
+      "model": "one-parameter Cox model stratified by year; calendar-month clustered bootstrap",
+      "gate": "hazard ratio < 1 in at least four evaluable years and pooled 95% bootstrap CI below 1"
+    }
+  ],
+  "secondary_outputs": [
+    "first passage to fixed fractions 0.10, 0.50 and 1.00 with Holm correction",
+    "maximum counter and aligned excursions at H1/H3/H6/H12",
+    "time of maximum counter excursion",
+    "sign-change count",
+    "area under counter excursion curve"
+  ],
+  "multiplicity": {
+    "primary_tests": 2,
+    "correction": "Holm",
+    "threshold_search": false,
+    "fixed_fraction_family": [
+      0.1,
+      0.25,
+      0.5,
+      1.0
+    ]
+  },
+  "stopping_rules": [
+    "Stop if any event path is discontinuous or cannot be joined exactly.",
+    "Do not alter P2 or the 0.25 primary barrier after reading results.",
+    "If T1 and T2 both fail, downgrade P2 to a route association and close this mechanism family.",
+    "If at least one primary test passes but the other fails, retain P2 as partial and do not build R23B.",
+    "Only if both primary tests pass may a P2 transition state be included in a future multiprocess model."
+  ]
+}
