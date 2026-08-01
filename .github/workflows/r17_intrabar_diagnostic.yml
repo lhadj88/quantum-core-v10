@@ -1,0 +1,54 @@
+name: R17 Intrabar Diagnostic
+
+on:
+  push:
+    branches:
+      - agent/r17-intrabar-diagnostic
+    paths:
+      - 'research/r17_intrabar_diagnostic/**'
+      - '.github/workflows/r17_intrabar_diagnostic.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'research/r17_intrabar_diagnostic/**'
+      - '.github/workflows/r17_intrabar_diagnostic.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONHASHSEED: '20260731'
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: research/r17_intrabar_diagnostic/requirements.txt
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r research/r17_intrabar_diagnostic/requirements.txt
+      - name: Execute R17 diagnostic
+        run: python research/r17_intrabar_diagnostic/run_r17_intrabar_v3.py
+      - name: Package evidence
+        if: always()
+        run: |
+          if [ -d artifacts/r17_intrabar_diagnostic_v0_1 ]; then
+            tar -czf R17_INTRABAR_DIAGNOSTIC_v0_1.tar.gz artifacts/r17_intrabar_diagnostic_v0_1
+          fi
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: R17_INTRABAR_DIAGNOSTIC_v0_1
+          path: |
+            artifacts/r17_intrabar_diagnostic_v0_1
+            R17_INTRABAR_DIAGNOSTIC_v0_1.tar.gz
+          if-no-files-found: error
+          retention-days: 30
