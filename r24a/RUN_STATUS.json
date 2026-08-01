@@ -1,12 +1,17 @@
 {
   "protocol_id": "R24A_DYNAMIC_MULTIPROCESS_TRANSITION_ATLAS_v0_1",
-  "state": "STARTED",
+  "state": "FAILED",
   "issue_number": "29",
   "workflow_run_id": "30675003535",
-  "started_at_utc": "2026-08-01T00:13:50.431169+00:00",
-  "input_sha256_expected": "24a91aa2b447ce63b00576325f9f13e5560f78fc22342ee3a80a52ae5fc0599f",
-  "engine_sha256_expected": "dcca43cbd2e9a74f1888f77e787ed79f8b9b3288e28526a1a8adc3a9af4eb4f0",
-  "preregistration_sha256_expected": "96b209ff6862be84486e21d13e6d9e0b07e6f46ba814479905f73af8e639d3e3",
-  "scope_sha256_expected": "0438691a20870af4e75d551106f38601cb91f55f6c0e1790ae334c486cdc7670",
+  "finished_at_utc": "2026-08-01T00:14:05.605388+00:00",
+  "input_sha256": "24a91aa2b447ce63b00576325f9f13e5560f78fc22342ee3a80a52ae5fc0599f",
+  "engine_sha256": "dcca43cbd2e9a74f1888f77e787ed79f8b9b3288e28526a1a8adc3a9af4eb4f0",
+  "preregistration_sha256": "96b209ff6862be84486e21d13e6d9e0b07e6f46ba814479905f73af8e639d3e3",
+  "scope_sha256": "0438691a20870af4e75d551106f38601cb91f55f6c0e1790ae334c486cdc7670",
+  "step_outcomes": {
+    "install": "success",
+    "reconstruct": "failure",
+    "execute": "skipped"
+  },
   "multiprocess_guardrail": "Dynamic topology is a phenomenological coordinate, not a dominant route or classifier."
 }
