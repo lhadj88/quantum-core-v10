@@ -1,0 +1,39 @@
+name: R21 Coinbase History Probe
+
+on:
+  push:
+    branches:
+      - agent/r21-coinbase-binance-leadership
+    paths:
+      - 'research/r21_coinbase_binance/**'
+      - '.github/workflows/r21_coinbase_history_probe.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'research/r21_coinbase_binance/**'
+      - '.github/workflows/r21_coinbase_history_probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Probe Coinbase BTC-USD historical candles
+        run: python research/r21_coinbase_binance/probe_coinbase_history.py
+      - name: Upload probe evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: R21_COINBASE_HISTORY_PROBE_v0_1
+          path: artifacts/r21_coinbase_history_probe_v0_1
+          if-no-files-found: error
+          retention-days: 30
