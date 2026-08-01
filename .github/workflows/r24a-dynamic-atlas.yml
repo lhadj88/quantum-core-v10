@@ -1,0 +1,133 @@
+name: R24A dynamic multiprocess atlas
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: read
+
+jobs:
+  execute:
+    if: github.event.issue.title == 'RUN R24A DYNAMIC MULTIPROCESS ATLAS'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/r23a2-multiprocess-temporal-budget
+          fetch-depth: 0
+      - name: Publish STARTED marker
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          mkdir -p r24a
+          python - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          status = {
+            'protocol_id': 'R24A_DYNAMIC_MULTIPROCESS_TRANSITION_ATLAS_v0_1',
+            'state': 'STARTED',
+            'issue_number': os.environ.get('ISSUE_NUMBER'),
+            'workflow_run_id': os.environ.get('RUN_ID'),
+            'started_at_utc': datetime.now(timezone.utc).isoformat(),
+            'payload_sha256_expected': 'dbc9b4a35f7899fd727272445f4eca6c6a9288c5bfce8a9d49143ce15bececba',
+            'multiprocess_guardrail': 'Dynamic topology is a phenomenological coordinate, not a dominant route or classifier.'
+          }
+          open('r24a/RUN_STATUS.json','w').write(json.dumps(status, indent=2)+'\n')
+          PY
+          git add r24a/RUN_STATUS.json
+          git commit -m 'mark R24A dynamic atlas started'
+          git push origin HEAD:agent/r23a2-multiprocess-temporal-budget
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          RUN_ID: ${{ github.run_id }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        id: install
+        continue-on-error: true
+        run: python -m pip install --upgrade pip numpy pandas requests
+      - name: Extract and verify frozen payload from issue
+        id: extract
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          import base64, hashlib, os, tarfile
+          from pathlib import Path
+          body = os.environ['ISSUE_BODY']
+          start_marker = 'R24A_PAYLOAD_BASE64_BEGIN\n'
+          end_marker = '\nR24A_PAYLOAD_BASE64_END'
+          assert start_marker in body and end_marker in body
+          payload_b64 = body.split(start_marker,1)[1].split(end_marker,1)[0].strip()
+          blob = base64.b64decode(payload_b64)
+          digest = hashlib.sha256(blob).hexdigest()
+          expected = 'dbc9b4a35f7899fd727272445f4eca6c6a9288c5bfce8a9d49143ce15bececba'
+          assert digest == expected, (digest, expected)
+          Path('r24a').mkdir(exist_ok=True)
+          Path('r24a/FROZEN_PAYLOAD.tar.gz').write_bytes(blob)
+          with tarfile.open('r24a/FROZEN_PAYLOAD.tar.gz','r:gz') as archive:
+              names = sorted(archive.getnames())
+              expected_names = sorted(['00_PREREGISTRATION.json','00_SCOPE.md','input_events_202.csv','run_r24a.py'])
+              assert names == expected_names, names
+              archive.extractall('r24a')
+          PY
+          python -m py_compile r24a/run_r24a.py
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+      - name: Execute frozen R24A atlas
+        id: execute
+        if: steps.extract.outcome == 'success'
+        continue-on-error: true
+        run: |
+          rm -rf r24a/output
+          set -o pipefail
+          python r24a/run_r24a.py \
+            --input r24a/input_events_202.csv \
+            --output r24a/output \
+            --prereg r24a/00_PREREGISTRATION.json \
+            --scope r24a/00_SCOPE.md \
+            2>&1 | tee r24a/RUN_LOG.txt
+      - name: Publish final status and immutable outputs
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          from pathlib import Path
+          outcomes = {
+            'install': os.environ.get('INSTALL_OUTCOME'),
+            'extract': os.environ.get('EXTRACT_OUTCOME'),
+            'execute': os.environ.get('EXECUTE_OUTCOME')
+          }
+          state = 'SUCCEEDED' if outcomes['execute'] == 'success' else 'FAILED'
+          status = {
+            'protocol_id': 'R24A_DYNAMIC_MULTIPROCESS_TRANSITION_ATLAS_v0_1',
+            'state': state,
+            'issue_number': os.environ.get('ISSUE_NUMBER'),
+            'workflow_run_id': os.environ.get('RUN_ID'),
+            'finished_at_utc': datetime.now(timezone.utc).isoformat(),
+            'payload_sha256': 'dbc9b4a35f7899fd727272445f4eca6c6a9288c5bfce8a9d49143ce15bececba',
+            'step_outcomes': outcomes,
+            'multiprocess_guardrail': 'Dynamic topology is a phenomenological coordinate, not a dominant route or classifier.'
+          }
+          Path('r24a/RUN_STATUS.json').write_text(json.dumps(status, indent=2)+'\n')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add r24a/RUN_STATUS.json
+          test ! -f r24a/RUN_LOG.txt || git add r24a/RUN_LOG.txt
+          test ! -f r24a/FROZEN_PAYLOAD.tar.gz || git add r24a/FROZEN_PAYLOAD.tar.gz
+          test ! -f r24a/00_PREREGISTRATION.json || git add r24a/00_PREREGISTRATION.json r24a/00_SCOPE.md r24a/input_events_202.csv r24a/run_r24a.py
+          test ! -d r24a/output || git add r24a/output
+          git commit -m 'record R24A frozen dynamic atlas outputs'
+          git push origin HEAD:agent/r23a2-multiprocess-temporal-budget
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          RUN_ID: ${{ github.run_id }}
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          EXTRACT_OUTCOME: ${{ steps.extract.outcome }}
+          EXECUTE_OUTCOME: ${{ steps.execute.outcome }}
