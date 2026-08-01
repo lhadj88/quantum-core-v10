@@ -32,7 +32,10 @@ jobs:
             'issue_number': os.environ.get('ISSUE_NUMBER'),
             'workflow_run_id': os.environ.get('RUN_ID'),
             'started_at_utc': datetime.now(timezone.utc).isoformat(),
-            'payload_sha256_expected': 'dbc9b4a35f7899fd727272445f4eca6c6a9288c5bfce8a9d49143ce15bececba',
+            'input_sha256_expected': '24a91aa2b447ce63b00576325f9f13e5560f78fc22342ee3a80a52ae5fc0599f',
+            'engine_sha256_expected': 'dcca43cbd2e9a74f1888f77e787ed79f8b9b3288e28526a1a8adc3a9af4eb4f0',
+            'preregistration_sha256_expected': '96b209ff6862be84486e21d13e6d9e0b07e6f46ba814479905f73af8e639d3e3',
+            'scope_sha256_expected': '0438691a20870af4e75d551106f38601cb91f55f6c0e1790ae334c486cdc7670',
             'multiprocess_guardrail': 'Dynamic topology is a phenomenological coordinate, not a dominant route or classifier.'
           }
           open('r24a/RUN_STATUS.json','w').write(json.dumps(status, indent=2)+'\n')
@@ -50,37 +53,24 @@ jobs:
         id: install
         continue-on-error: true
         run: python -m pip install --upgrade pip numpy pandas requests
-      - name: Extract and verify frozen payload from issue
-        id: extract
+      - name: Reconstruct and verify frozen R24A files
+        id: reconstruct
         if: steps.install.outcome == 'success'
         continue-on-error: true
         run: |
-          python - <<'PY'
-          import base64, hashlib, os, tarfile
-          from pathlib import Path
-          body = os.environ['ISSUE_BODY']
-          start_marker = 'R24A_PAYLOAD_BASE64_BEGIN\n'
-          end_marker = '\nR24A_PAYLOAD_BASE64_END'
-          assert start_marker in body and end_marker in body
-          payload_b64 = body.split(start_marker,1)[1].split(end_marker,1)[0].strip()
-          blob = base64.b64decode(payload_b64)
-          digest = hashlib.sha256(blob).hexdigest()
-          expected = 'dbc9b4a35f7899fd727272445f4eca6c6a9288c5bfce8a9d49143ce15bececba'
-          assert digest == expected, (digest, expected)
-          Path('r24a').mkdir(exist_ok=True)
-          Path('r24a/FROZEN_PAYLOAD.tar.gz').write_bytes(blob)
-          with tarfile.open('r24a/FROZEN_PAYLOAD.tar.gz','r:gz') as archive:
-              names = sorted(archive.getnames())
-              expected_names = sorted(['00_PREREGISTRATION.json','00_SCOPE.md','input_events_202.csv','run_r24a.py'])
-              assert names == expected_names, names
-              archive.extractall('r24a')
-          PY
+          set -euo pipefail
+          cat r24a/frozen/run_r24a.py.gz.b64.part_001 r24a/frozen/run_r24a.py.gz.b64.part_002 > /tmp/run_r24a.py.gz.b64
+          test "$(sha256sum /tmp/run_r24a.py.gz.b64 | cut -d' ' -f1)" = "5bd12ed51dad1a7487aacd8be0f12be88576716e84e5a321a5f1232ddf8d826a"
+          base64 -d /tmp/run_r24a.py.gz.b64 | gzip -d > r24a/run_r24a.py
+          cp r23a2b/input_events_202.csv r24a/input_events_202.csv
+          test "$(sha256sum r24a/run_r24a.py | cut -d' ' -f1)" = "dcca43cbd2e9a74f1888f77e787ed79f8b9b3288e28526a1a8adc3a9af4eb4f0"
+          test "$(sha256sum r24a/input_events_202.csv | cut -d' ' -f1)" = "24a91aa2b447ce63b00576325f9f13e5560f78fc22342ee3a80a52ae5fc0599f"
+          test "$(sha256sum r24a/00_PREREGISTRATION.json | cut -d' ' -f1)" = "96b209ff6862be84486e21d13e6d9e0b07e6f46ba814479905f73af8e639d3e3"
+          test "$(sha256sum r24a/00_SCOPE.md | cut -d' ' -f1)" = "0438691a20870af4e75d551106f38601cb91f55f6c0e1790ae334c486cdc7670"
           python -m py_compile r24a/run_r24a.py
-        env:
-          ISSUE_BODY: ${{ github.event.issue.body }}
       - name: Execute frozen R24A atlas
         id: execute
-        if: steps.extract.outcome == 'success'
+        if: steps.reconstruct.outcome == 'success'
         continue-on-error: true
         run: |
           rm -rf r24a/output
@@ -100,7 +90,7 @@ jobs:
           from pathlib import Path
           outcomes = {
             'install': os.environ.get('INSTALL_OUTCOME'),
-            'extract': os.environ.get('EXTRACT_OUTCOME'),
+            'reconstruct': os.environ.get('RECONSTRUCT_OUTCOME'),
             'execute': os.environ.get('EXECUTE_OUTCOME')
           }
           state = 'SUCCEEDED' if outcomes['execute'] == 'success' else 'FAILED'
@@ -110,7 +100,10 @@ jobs:
             'issue_number': os.environ.get('ISSUE_NUMBER'),
             'workflow_run_id': os.environ.get('RUN_ID'),
             'finished_at_utc': datetime.now(timezone.utc).isoformat(),
-            'payload_sha256': 'dbc9b4a35f7899fd727272445f4eca6c6a9288c5bfce8a9d49143ce15bececba',
+            'input_sha256': '24a91aa2b447ce63b00576325f9f13e5560f78fc22342ee3a80a52ae5fc0599f',
+            'engine_sha256': 'dcca43cbd2e9a74f1888f77e787ed79f8b9b3288e28526a1a8adc3a9af4eb4f0',
+            'preregistration_sha256': '96b209ff6862be84486e21d13e6d9e0b07e6f46ba814479905f73af8e639d3e3',
+            'scope_sha256': '0438691a20870af4e75d551106f38601cb91f55f6c0e1790ae334c486cdc7670',
             'step_outcomes': outcomes,
             'multiprocess_guardrail': 'Dynamic topology is a phenomenological coordinate, not a dominant route or classifier.'
           }
@@ -120,8 +113,7 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add r24a/RUN_STATUS.json
           test ! -f r24a/RUN_LOG.txt || git add r24a/RUN_LOG.txt
-          test ! -f r24a/FROZEN_PAYLOAD.tar.gz || git add r24a/FROZEN_PAYLOAD.tar.gz
-          test ! -f r24a/00_PREREGISTRATION.json || git add r24a/00_PREREGISTRATION.json r24a/00_SCOPE.md r24a/input_events_202.csv r24a/run_r24a.py
+          test ! -f r24a/run_r24a.py || git add r24a/run_r24a.py r24a/input_events_202.csv
           test ! -d r24a/output || git add r24a/output
           git commit -m 'record R24A frozen dynamic atlas outputs'
           git push origin HEAD:agent/r23a2-multiprocess-temporal-budget
@@ -129,5 +121,5 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           RUN_ID: ${{ github.run_id }}
           INSTALL_OUTCOME: ${{ steps.install.outcome }}
-          EXTRACT_OUTCOME: ${{ steps.extract.outcome }}
+          RECONSTRUCT_OUTCOME: ${{ steps.reconstruct.outcome }}
           EXECUTE_OUTCOME: ${{ steps.execute.outcome }}
