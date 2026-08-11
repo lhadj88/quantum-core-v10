@@ -1,0 +1,29 @@
+name: R34F19 Spot-Perp 5m Spectral Flow
+
+on:
+  push:
+    branches:
+      - research/r34f19-r34f20-runner
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  run-r34f19:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --disable-pip-version-check numpy pandas requests
+      - name: Execute target-blind R34F19 runner
+        run: python r34f19_run.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r34f19-targetblind
+          path: out_r34f19/
+          if-no-files-found: error
+          retention-days: 7
