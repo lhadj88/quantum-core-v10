@@ -26,7 +26,7 @@ jobs:
         run: python -m pip install --disable-pip-version-check numpy pandas requests
 
       - name: Execute canonical target-blind R34F16 winner runner
-        run: python r34f16_runner_fix.py
+        run: python r34f16_run_plain.py
 
       - name: Upload canonical R34F16 target-blind output
         if: always()
