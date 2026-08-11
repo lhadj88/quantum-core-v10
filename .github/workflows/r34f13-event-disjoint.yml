@@ -1,4 +1,4 @@
-name: R34F16 Canonical Dynamic Winner Acquisition
+name: R34F16 Source Diagnostic
 
 on:
   push:
@@ -10,29 +10,19 @@ permissions:
   contents: read
 
 jobs:
-  run-r34f16:
+  diagnose-r34f16:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 15
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
-      - name: Install research dependencies
-        run: python -m pip install --disable-pip-version-check numpy pandas requests
-
-      - name: Execute canonical target-blind R34F16 winner runner
-        run: python r34f16_run_plain.py
-
-      - name: Upload canonical R34F16 target-blind output
-        if: always()
-        uses: actions/upload-artifact@v4
+      - run: python -m pip install --disable-pip-version-check numpy pandas requests
+      - name: Diagnose source formats without targets
+        run: python r34f16_source_diag.py
+      - uses: actions/upload-artifact@v4
         with:
-          name: r34f16-targetblind-winner
-          path: out_r34f16/
-          if-no-files-found: error
+          name: r34f16-source-diagnostic
+          path: r34f16_source_diag.json
           retention-days: 7
