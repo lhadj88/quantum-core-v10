@@ -1,4 +1,4 @@
-name: R34F16R1 Available-Source Acquisition
+name: R34F17 Time-Resolved Spectral Channels
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  run-r34f16r1:
+  run-r34f17:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -19,11 +19,11 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install --disable-pip-version-check numpy pandas requests
-      - name: Execute target-blind R34F16R1 source-migration runner
-        run: python r34f16_r1_run.py
+      - name: Execute target-blind R34F17 spectral runner
+        run: python r34f17_run.py
       - uses: actions/upload-artifact@v4
         with:
-          name: r34f16r1-targetblind-winner
-          path: out_r34f16r1/
+          name: r34f17-targetblind
+          path: out_r34f17/
           if-no-files-found: error
           retention-days: 7
