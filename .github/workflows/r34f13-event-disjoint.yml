@@ -25,14 +25,26 @@ jobs:
       - name: Install numerical dependency
         run: python -m pip install --disable-pip-version-check numpy
 
-      - name: Execute target-blind transport runner
+      - name: Execute target-blind COMPETITION transport runner
         run: python r34f13_runner.py
 
-      - name: Upload target-blind output
+      - name: Execute target-blind QUIESCENCE transport runner
+        run: python r34f13_quiescence_runner.py
+
+      - name: Upload COMPETITION target-blind output
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: r34f13-targetblind-output
           path: out/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload QUIESCENCE target-blind output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r34f13-quiescence-targetblind-output
+          path: out_quiescence/
           if-no-files-found: error
           retention-days: 7
